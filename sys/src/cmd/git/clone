@@ -59,7 +59,7 @@ fn clone{
 				outfile = ".git/" $2
 				outdir = outfile
 				gsub("/?[^/]*/?$", "", outdir)
-				system(sprintf("mkdir -p %q", outdir))
+				system(sprintf("mkdir -p ''%s''", outdir))
 				print $3 > outfile
 				close(outfile)
 			}

@@ -49,7 +49,7 @@ HFILES=git.h
 DIRS=aux
 
 BASE=\
-	http://git.9front.org/plan9front/9front/ccef7a8bdca9d58397ab9ebe6af7ccf29edd6dad
+	http://git.9front.org/plan9front/9front/f1c2de2b318c8789d41831b2d4b1d7a69fcac9e3
 
 </sys/src/cmd/mkmany
 

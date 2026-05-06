@@ -145,7 +145,7 @@
   
   # if we remove the current branch without switching, bad things happen
   if(~ $remove 1 && ~ $origbranch $new)
-/fd/6:76,82 - branch:87,95
+/fd/6:76,82 - branch:87,103
   basedir=`{git/query -p $base}
   dirtypaths=()
   if(! ~ $#modified 0 || ! ~ $#deleted 0)
@@ -153,13 +153,21 @@
 + 	ifs=$nl {
 + 		dirtypaths=`{git/walk -cfRMA $modified $deleted}
 + 	}
-  if(~ $#dirtypaths 0)
-  	cleanpaths=($modified $deleted)
-  if not {
-/fd/6:95,101 - branch:108,116
++ if(~ $#dirtypaths 0)
++ 	cleanpaths=($modified $deleted)
++ if not {
++ 	cleanpaths=()
++ 	for(p in $modified $deleted)
++ 		if(! ~ $p $dirtypaths)
++ 			cleanpaths=($cleanpaths $p)
++ }
+  
+  >>[3].git/INDEX9{
+  	for(d in $deleted){
+/fd/6:86,92 - branch:107,115
+  		}
   	}
-  	
-  	for(m in $cleanpaths){
+  	for(m in $modified $deleted) if(! ~ $m $dirtypaths){
 - 		d=`$nl{basename -d $m}
 + 		ifs=$nl {
 + 			d=`{basename -d $m}
@@ -194,6 +202,15 @@
   	branchflag=(-b $branch)
   
   if(test -e $local && ~ `{ls $local | sed 1q | wc -l} 1)
+/fd/7:56,62 - clone:59,65
+  				outfile = ".git/" $2
+  				outdir = outfile
+  				gsub("/?[^/]*/?$", "", outdir)
+- 				system(sprintf("mkdir -p %q", outdir))
++ 				system(sprintf("mkdir -p ''%s''", outdir))
+  				print $3 > outfile
+  				close(outfile)
+  			}
 /fd/7:67,73 - clone:70,76
   				refdir = headref;
   				gsub("/?[^/]*/?$", "", refdir)
@@ -222,19 +239,19 @@
   	if(! ~ $#parents 0)
   		pflags='-p'^$parents
   	hash=`{git/save -n $"name -e $"email -m $"msg $pflags $files || die $status}
-/fd/8:103,110 - commit:103,111
+/fd/8:158,165 - commit:158,166
   
   gitup
   
-- flagfmt='m:msg message, r:revise, e:edit'; args='[file ...]'
+- flagfmt='m:msg message, r:revise, e:edit, p:partial'; args='[file ...]'
 - eval `''{aux/getflags $*} || exec aux/usage
-+ flagfmt='r,e,m message'; args='[file ...]'
++ flagfmt='e,r,p,m message'; args='[file ...]'
 + ifs=() eval `{aux/getflags $*} || exec aux/usage
-+ revise=$flagr edit=$flage msg=$flagm
++ revise=$flagr edit=$flage partial=$flagp msg=$flagm
   
-  msgfile=/tmp/git-msg.$pid
-  if(~ $#msg 1)
-/fd/8:116,125 - commit:117,128
+  wdir=/mnt/git
+  ramfs -m $wdir
+/fd/8:173,182 - commit:174,185
   }
   
   files=()
@@ -250,7 +267,7 @@
 + }
   if(~ $status '' || ~ $#files 0 && ! test -f .git/merge-parents && ~ $#revise 0)
   	die 'nothing to commit'
-  @{
+  if(~ $#partial 1){
 /fd/9:109,115 - compat:109,118
   		filter=cat
   	if not
@@ -628,8 +645,8 @@
 + for(f in $walked){
   	mkdir -p `{basename -d $f}
   	cp -x -- $commit/tree/$f $f
-  	touch $f
-/fd/25:135,141 - log.c:135,140
+  	touch -c $f
+/fd/25:137,143 - log.c:137,142
   static int
   show(Object *o)
   {
@@ -637,7 +654,7 @@
   	char *p, *q, *e;
   
   	assert(o->type == GCommit);
-/fd/25:147,159 - log.c:146,157
+/fd/25:149,161 - log.c:148,159
   		Bwrite(out, p, q - p);
   		Bputc(out, '\n');
   	}else{
@@ -652,16 +669,15 @@
   		Bprint(out, "\n");
   		p = o->commit->msg;
   		e = p + o->commit->nmsg;
-/fd/25:287,298 - log.c:285,299
+/fd/25:287,298 - log.c:285,298
+  	if(chdir(repo) == -1)
   		sysfatal("chdir: %r");
   
-  	gitinit();
 - 	tmfmtinstall();
 - 	out = Bfdopen(1, OWRITE);
 + 	out = emalloc(sizeof(Biobuf));
 + 	if(Binit(out, 1, OWRITE) == -1)
 + 		sysfatal("open out: %r");
-+ 
   	if(queryexpr != nil)
   		showquery(queryexpr);
   	else
@@ -746,7 +762,7 @@
   
   enum {
   	Rflg	= 1 << 0,
-/fd/37:457,464 - walk.c:460,467
+/fd/37:454,461 - walk.c:457,464
   			if(access(".git/index9", AEXIST) == 0){
   				fprint(2, "index format conversion needed:\n");
   				fprint(2, "\tcd %s && git/fs\n", repopath);
@@ -757,7 +773,7 @@
   				exits("noindex");
   			}
   			staleidx = 1;
-/fd/37:530,536 - walk.c:533,540
+/fd/37:527,533 - walk.c:530,537
   		loadwdir(argrel[i]);
   	qsort(wdir, nwdir, sizeof(Idxent), idxcmp);
   
@@ -767,7 +783,7 @@
   		sysfatal("open out: %r");
   
   	i = 0;
-/fd/37:592,601 - walk.c:596,608
+/fd/37:589,598 - walk.c:593,605
   		}
   	}
   	Bterm(o);
@@ -782,7 +798,7 @@
   			close(wfd);
   			goto Nope;
   		}
-/fd/37:611,616 - walk.c:618,625
+/fd/37:608,613 - walk.c:615,622
   				idx[i].path);
   		}
   		Bterm(w);
@@ -798,7 +814,7 @@
 + DIRS=aux
   
 + BASE=\
-+ 	http://git.9front.org/plan9front/9front/ccef7a8bdca9d58397ab9ebe6af7ccf29edd6dad
++ 	http://git.9front.org/plan9front/9front/f1c2de2b318c8789d41831b2d4b1d7a69fcac9e3
 + 
   </sys/src/cmd/mkmany
   
