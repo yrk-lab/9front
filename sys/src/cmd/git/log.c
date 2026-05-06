@@ -135,7 +135,6 @@ nextline(char *p, char *e)
 static int
 show(Object *o)
 {
-	Tm tm;
 	char *p, *q, *e;
 
 	assert(o->type == GCommit);
@@ -147,13 +146,12 @@ show(Object *o)
 		Bwrite(out, p, q - p);
 		Bputc(out, '\n');
 	}else{
-		tmtime(&tm, o->commit->mtime, tzload("local"));
 		Bprint(out, "Hash:\t%H\n", o->hash);
 		Bprint(out, "Author:\t%s\n", o->commit->author);
 		if(o->commit->committer != nil
 		&& strcmp(o->commit->author, o->commit->committer) != 0)
 			Bprint(out, "Committer:\t%s\n", o->commit->committer);
-		Bprint(out, "Date:\t%τ\n", tmfmt(&tm, "WW MMM D hh:mm:ss z YYYY"));
+		Bprint(out, "Date:\t%s", ctime(o->commit->mtime));
 		Bprint(out, "\n");
 		p = o->commit->msg;
 		e = p + o->commit->nmsg;
@@ -287,12 +285,15 @@ main(int argc, char **argv)
 		sysfatal("chdir: %r");
 
 	gitinit();
-	tmfmtinstall();
-	out = Bfdopen(1, OWRITE);
+	out = emalloc(sizeof(Biobuf));
+	if(Binit(out, 1, OWRITE) == -1)
+		sysfatal("open out: %r");
+
 	if(queryexpr != nil)
 		showquery(queryexpr);
 	else
 		showcommits(commitid);
 	Bterm(out);
+	free(out);
 	exits(nil);
 }
