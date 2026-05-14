@@ -78,6 +78,16 @@ runtest:V:
 test.clean:V:
 	cd test && mk $MKFLAGS clean
 
+vendor:V:
+	cp ../^(patch walk)^.c aux/
+	mkdir -p aux/diff/ aux/diff/test/
+	cp ../diff/*.[ch] aux/diff/
+	cp `{ls ../diff/test | grep -v mkfile} aux/diff/test/
+	cp ../mktest test/
+
+nuke:V:
+	rm -f *.[$OS] [$OS].??* $TARG test/mktest aux/walk.c aux/patch.c aux/diff/*.[ch] aux/diff/*.[$OS] aux/diff/[$OS].??* `{ls aux/diff/test | grep -v mkfile}
+
 %.dirs:V:
 	for(i in $DIRS) @{
 		cd $i

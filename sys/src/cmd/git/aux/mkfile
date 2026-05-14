@@ -15,7 +15,6 @@ all:V:	dirs
 install:V: install.dirs
 installall:V: installall.dirs
 clean:V: clean.dirs
-nuke:V: nuke.dirs
 test:V: test.dirs
 
 dirs:V:
