@@ -140,7 +140,7 @@ fn patch {
 }
 
 fn diff {
-	ape/diff $*
+	git/aux/diff $*
 }
 
 fn hold {
