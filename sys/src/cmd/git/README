@@ -11,16 +11,11 @@ Documentation
 
 Notes
 
-	The code and the test suite has been changed not to rely on
-	certain newer additions like `RS{cmd} syntax in rc,
+	The code and the test suite has been changed not to rely
+	on certain newer additions like `RS{cmd} syntax in rc,
 	aux/getflags extensions or Bfdopen function in libbio.  Some
-	utillity programs like walk, patch and merge3 were brough over
-	and installed under /bin/git/aux/.
-
-	The diff against the base 9front revision is in base.diff; to
-	refresh, run:
-
-		rm base.diff; mk base.diff
+	utillity programs like walk, patch and merge3 are brough
+	over with 'mk vendor' and installed under /bin/git/aux/.
 
 Caveats
 
@@ -31,3 +26,4 @@ Caveats
 	Due to webfs differences, the git/get, git/clone, git/pull
 	only send generic HTTP headers.  While GitHub seems to be fine
 	with that, others may not.
+
