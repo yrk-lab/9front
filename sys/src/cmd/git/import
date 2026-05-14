@@ -80,7 +80,7 @@ fn apply @{
 		state="headers"
 		diffpath = ENVIRON["diffpath"]
 	}
-	state=="diff" && !/^[-+ @]|^diff|^$/{
+	state=="diff" && !/^[-+ @]|^diff|^$|^\\ No newline at end of file$/{
 		state="footers";
 		doapply();
 	}
