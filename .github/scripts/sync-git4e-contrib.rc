@@ -36,7 +36,9 @@ run 9fs sources
 run /n/sources/contrib/fgb/root/rc/bin/contrib/install fgb/contrib
 run contrib/install yk/git
 run replica/pull -v -s/ /dist/replica/git
+run cd $checkout/sys/src/cmd/git
 run mk vendor
+run cd $checkout
 run disk/mkfs -d / -s $checkout /sys/lib/sysconfig/proto/git
 
 echo '+ echo user=yk role=client proto=p9sk1 dom=9p.io !****** > /mnt/factotum/ctl'

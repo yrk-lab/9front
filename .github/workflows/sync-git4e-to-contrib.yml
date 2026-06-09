@@ -1,0 +1,113 @@
+name: Sync git4e to legacy contrib
+
+on:
+  push:
+    branches:
+      - git4e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-git4e-contrib:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout git4e branch
+        uses: actions/checkout@v4
+        with:
+          ref: git4e
+          fetch-depth: 1
+
+      - name: Install host dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            expect \
+            bzip2 \
+            curl
+
+      - name: Prepare 9legacy tree for QEMU
+        env:
+          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCES_SECRET:-}" ]; then
+            echo "SOURCES_SECRET is not configured" >&2
+            exit 1
+          fi
+
+          git clone --depth 1 --branch main https://github.com/0intro/9legacy.git /tmp/9legacy
+          cd /tmp/9legacy
+          git checkout 894c7b3b8ade4b500862c45cc53be23a610faa36
+
+          ./boot/mkdirs
+
+          curl -fsSL http://9legacy.org/download/9legacy.iso.bz2 | bunzip2 > /tmp/9legacy.iso
+          sudo mkdir -p /mnt/9legacy-iso
+          sudo mount -o loop /tmp/9legacy.iso /mnt/9legacy-iso
+
+          cp -a /mnt/9legacy-iso/386/bin/* 386/bin
+          cp -a /mnt/9legacy-iso/386/9* /mnt/9legacy-iso/386/init /mnt/9legacy-iso/386/mbr /mnt/9legacy-iso/386/pbs* 386
+          cp -a /mnt/9legacy-iso/amd64/bin/* amd64/bin
+          cp -a /mnt/9legacy-iso/amd64/9* /mnt/9legacy-iso/amd64/init amd64
+          cp -a /mnt/9legacy-iso/acme/bin/386/* acme/bin/386
+          cp -a /mnt/9legacy-iso/acme/bin/amd64/* acme/bin/amd64
+
+          sudo umount /mnt/9legacy-iso
+
+          mkdir -p /tmp/9legacy/github/9front
+          cp -a "$GITHUB_WORKSPACE/." /tmp/9legacy/github/9front/
+          printf '%s' "$SOURCES_SECRET" > /tmp/9legacy/github/9front/.sources_secret
+          chmod 600 /tmp/9legacy/github/9front/.sources_secret
+
+      - name: Boot 9legacy in QEMU and run sync script
+        env:
+          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCES_SECRET:-}" ]; then
+            echo "SOURCES_SECRET is not configured" >&2
+            exit 1
+          fi
+
+          cat > /tmp/run-9legacy-sync.exp <<'EOT'
+          #!/usr/bin/expect -f
+
+          set timeout 5400
+          spawn /tmp/9legacy/boot/qemu
+
+          expect {
+            -re {(%|#) $} {}
+            timeout {send_user "timed out waiting for shell prompt\n"; exit 1}
+          }
+
+          send -- "cd /github/9front\r"
+          expect {
+            -re {(%|#) $} {}
+            timeout {send_user "timed out waiting after cd\n"; exit 1}
+          }
+
+          send -- "SOURCES_SECRET=`{cat /github/9front/.sources_secret} .github/scripts/sync-git4e-contrib.rc /github/9front\r"
+          expect {
+            -re {(%|#) $} {}
+            timeout {send_user "timed out waiting for sync script to finish\n"; exit 1}
+          }
+
+          send -- "echo __SYNC_STATUS__$status\r"
+          expect {
+            -re {__SYNC_STATUS__0} {}
+            timeout {send_user "sync script failed\n"; exit 1}
+          }
+
+          send -- "fshalt\r"
+          expect eof
+          EOT
+
+          chmod +x /tmp/run-9legacy-sync.exp
+          /tmp/run-9legacy-sync.exp
