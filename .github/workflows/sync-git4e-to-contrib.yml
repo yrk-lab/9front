@@ -115,7 +115,13 @@ jobs:
         run: |
           set -euo pipefail
           cd /tmp/9legacy-run
-          ./boot/qemu
+          if ! timeout --signal=TERM 45m ./boot/qemu; then
+            status=$?
+            if [ "$status" -eq 124 ]; then
+              echo "QEMU run timed out after 45 minutes" >&2
+            fi
+            exit "$status"
+          fi
 
       - name: Validate sync result
         run: |
@@ -127,4 +133,4 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf /tmp/9legacy-run
+          sudo rm -rf /tmp/9legacy-run
