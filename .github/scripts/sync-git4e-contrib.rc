@@ -3,32 +3,32 @@
 rfork e
 
 fn usage {
-echo 'usage: sync-git4e-contrib.rc <9front-checkout-dir>' >[1=2]
-echo 'requires SOURCES_SECRET in environment' >[1=2]
-exit usage
+	echo 'usage: sync-git4e-contrib.rc <9front-checkout-dir>' >[1=2]
+	echo 'requires SOURCES_SECRET in environment' >[1=2]
+	exit usage
 }
 
 fn run {
-echo '+ ' $*
-$*
-if(! ~ $status ''){
-echo 'failed: ' $* >[1=2]
-exit failed
-}
+	echo '+ ' $*
+	$*
+	if(! ~ $status ''){
+		echo 'failed: ' $* >[1=2]
+		exit failed
+	}
 }
 
 if(! ~ $#* 1)
-usage
+	usage
 
 checkout=$1
 if(! test -d $checkout){
-echo 'checkout directory does not exist: ' $checkout >[1=2]
-exit badcheckout
+	echo 'checkout directory does not exist: ' $checkout >[1=2]
+	exit badcheckout
 }
 
 if(~ $#SOURCES_SECRET 0){
-echo 'SOURCES_SECRET is required' >[1=2]
-exit nosecret
+	echo 'SOURCES_SECRET is required' >[1=2]
+	exit nosecret
 }
 
 run cd $checkout

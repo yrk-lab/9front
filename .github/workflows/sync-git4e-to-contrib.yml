@@ -92,19 +92,19 @@ jobs:
           echo started > $statusfile
 
           if(! test -e /env/sourcessecret){
-          echo 'missing sourcessecret kernel parameter' >[1=2]
-          echo failed:nosecret > $statusfile
-          fshalt
-          exit nosecret
+          	echo 'missing sourcessecret kernel parameter' >[1=2]
+          	echo failed:nosecret > $statusfile
+          	fshalt
+          	exit nosecret
           }
 
           SOURCES_SECRET=`{cat /env/sourcessecret}
           cd /github/9front
-          SOURCES_SECRET=$SOURCES_SECRET .github/scripts/sync-git4e-contrib.rc /github/9front
+          .github/scripts/sync-git4e-contrib.rc /github/9front
           if(~ $status '')
-          echo ok > $statusfile
+          	echo ok > $statusfile
           if not
-          echo failed:sync > $statusfile
+          	echo failed:sync > $statusfile
 
           fshalt
           EORC
