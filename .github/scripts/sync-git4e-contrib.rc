@@ -1,0 +1,58 @@
+#!/bin/rc
+
+rfork e
+
+fn usage {
+	echo 'usage: sync-git4e-contrib.rc <9front-checkout-dir>' >[1=2]
+	echo 'requires SOURCES_SECRET in environment' >[1=2]
+	exit usage
+}
+
+fn run {
+	echo '+ ' $*
+	$*
+	if(! ~ $status ''){
+		echo 'failed: ' $* >[1=2]
+		exit failed
+	}
+}
+
+if(! ~ $#* 1)
+	usage
+
+checkout=$1
+if(! test -d $checkout){
+	echo 'checkout directory does not exist: ' $checkout >[1=2]
+	exit badcheckout
+}
+
+if(~ $#SOURCES_SECRET 0){
+	echo 'SOURCES_SECRET is required' >[1=2]
+	exit nosecret
+}
+
+run cd $checkout
+run 9fs sources
+run /n/sources/contrib/fgb/root/rc/bin/contrib/install fgb/contrib
+run contrib/install yk/git
+run replica/pull -v -s/ /dist/replica/git
+run cd $checkout/sys/src/cmd/git
+run mk vendor
+run cd $checkout
+run disk/mkfs -d / -s $checkout /sys/lib/sysconfig/proto/git
+
+echo '+ echo user=yk role=client proto=p9sk1 dom=9p.io !****** > /mnt/factotum/ctl'
+echo 'user=yk role=client proto=p9sk1 dom=9p.io !password='^$SOURCES_SECRET > /mnt/factotum/ctl
+if(! ~ $status ''){
+	echo 'failed: writing /mnt/factotum/ctl' >[1=2]
+	exit failed
+}
+
+run 9fs -m sources
+run contrib/create -m -u yk git /sys/lib/sysconfig/proto/git
+echo '+ echo Imported changes from GitHub | contrib/push git'
+echo 'Imported changes from GitHub' | contrib/push git
+if(! ~ $status ''){
+	echo 'failed: contrib/push git' >[1=2]
+	exit failed
+}
