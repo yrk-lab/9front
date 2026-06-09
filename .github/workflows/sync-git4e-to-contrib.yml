@@ -91,14 +91,13 @@ jobs:
           statusfile=/sync-git4e-contrib.status
           echo started > $statusfile
 
-          if(! test -e /env/sourcessecret){
-          	echo 'missing sourcessecret kernel parameter' >[1=2]
+          if(! test -e /env/SOURCES_SECRET){
+          	echo 'missing SOURCES_SECRET kernel parameter' >[1=2]
           	echo failed:nosecret > $statusfile
           	fshalt
           	exit nosecret
           }
 
-          SOURCES_SECRET=`{cat /env/sourcessecret}
           cd /github/9front
           .github/scripts/sync-git4e-contrib.rc /github/9front
           if(~ $status '')
@@ -110,7 +109,7 @@ jobs:
           EORC
           chmod +x /tmp/9legacy-run/rc/bin/rc.local
 
-          printf '\nsourcessecret=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
+          printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
 
       - name: Boot 9legacy in QEMU
         run: |
