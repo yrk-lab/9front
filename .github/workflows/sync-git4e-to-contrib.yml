@@ -109,7 +109,42 @@ jobs:
           EORC
           chmod +x /tmp/9legacy-run/rc/bin/rc.local
 
-          printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path('/tmp/9legacy-run/cfg/pxe/525400123456')
+          text = path.read_text()
+
+          if 'menudefault=' not in text:
+              lines = text.splitlines()
+              out = []
+              in_menu = False
+              inserted = False
+
+              for line in lines:
+                  stripped = line.strip()
+                  if in_menu and stripped.startswith('[') and stripped != '[menu]' and not inserted:
+                      out.append('menudefault=text, 1')
+                      inserted = True
+                      in_menu = False
+                  out.append(line)
+                  if stripped == '[menu]':
+                      in_menu = True
+                  elif in_menu and stripped.startswith('[') and stripped != '[menu]':
+                      in_menu = False
+
+              if in_menu and not inserted:
+                  out.append('menudefault=text, 1')
+                  inserted = True
+
+              if not inserted:
+                  raise SystemExit('missing [menu] block in PXE config')
+
+              text = '\n'.join(out) + '\n'
+
+          path.write_text(text + f'\nSOURCES_SECRET={os.environ["SOURCES_SECRET"]}\n')
+          PY
 
       - name: Boot 9legacy in QEMU
         run: |
