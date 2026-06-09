@@ -26,23 +26,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 \
-            expect \
             bzip2 \
-            curl
+            curl \
+            rsync
 
-      - name: Prepare 9legacy tree for QEMU
-        env:
-          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
+      - name: Restore 9legacy cache
+        id: cache-9legacy
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/9legacy-base
+            /tmp/9legacy.iso
+          key: 9legacy-qemu-base-${{ runner.os }}-894c7b3b8ade4b500862c45cc53be23a610faa36
+
+      - name: Build cached 9legacy base image
+        if: steps.cache-9legacy.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
 
-          if [ -z "${SOURCES_SECRET:-}" ]; then
-            echo "SOURCES_SECRET is not configured" >&2
-            exit 1
-          fi
-
-          git clone --depth 1 --branch main https://github.com/0intro/9legacy.git /tmp/9legacy
-          cd /tmp/9legacy
+          rm -rf /tmp/9legacy-base /tmp/9legacy-build
+          git clone --depth 1 --branch main https://github.com/0intro/9legacy.git /tmp/9legacy-build
+          cd /tmp/9legacy-build
           git checkout 894c7b3b8ade4b500862c45cc53be23a610faa36
 
           ./boot/mkdirs
@@ -60,12 +64,10 @@ jobs:
 
           sudo umount /mnt/9legacy-iso
 
-          mkdir -p /tmp/9legacy/github/9front
-          cp -a "$GITHUB_WORKSPACE/." /tmp/9legacy/github/9front/
-          printf '%s' "$SOURCES_SECRET" > /tmp/9legacy/github/9front/.sources_secret
-          chmod 600 /tmp/9legacy/github/9front/.sources_secret
+          rm -rf .git
+          mv /tmp/9legacy-build /tmp/9legacy-base
 
-      - name: Boot 9legacy in QEMU and run sync script
+      - name: Prepare runtime 9legacy tree
         env:
           SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
         run: |
@@ -76,38 +78,54 @@ jobs:
             exit 1
           fi
 
-          cat > /tmp/run-9legacy-sync.exp <<'EOT'
-          #!/usr/bin/expect -f
+          rm -rf /tmp/9legacy-run
+          cp -a /tmp/9legacy-base /tmp/9legacy-run
 
-          set timeout 5400
-          spawn /tmp/9legacy/boot/qemu
+          mkdir -p /tmp/9legacy-run/github/9front
+          rsync -a --delete "$GITHUB_WORKSPACE/" /tmp/9legacy-run/github/9front/
 
-          expect {
-            -re {(%|#) $} {}
-            timeout {send_user "timed out waiting for shell prompt\n"; exit 1}
+          cat > /tmp/9legacy-run/rc/bin/rc.local <<'EORC'
+          #!/bin/rc
+          rfork e
+
+          statusfile=/sync-git4e-contrib.status
+          echo started > $statusfile
+
+          if(! test -e /env/sourcessecret){
+          echo 'missing sourcessecret kernel parameter' >[1=2]
+          echo failed:nosecret > $statusfile
+          fshalt
+          exit nosecret
           }
 
-          send -- "cd /github/9front\r"
-          expect {
-            -re {(%|#) $} {}
-            timeout {send_user "timed out waiting after cd\n"; exit 1}
-          }
+          SOURCES_SECRET=`{cat /env/sourcessecret}
+          cd /github/9front
+          SOURCES_SECRET=$SOURCES_SECRET .github/scripts/sync-git4e-contrib.rc /github/9front
+          if(~ $status '')
+          echo ok > $statusfile
+          if not
+          echo failed:sync > $statusfile
 
-          send -- "SOURCES_SECRET=`{cat /github/9front/.sources_secret} .github/scripts/sync-git4e-contrib.rc /github/9front\r"
-          expect {
-            -re {(%|#) $} {}
-            timeout {send_user "timed out waiting for sync script to finish\n"; exit 1}
-          }
+          fshalt
+          EORC
+          chmod +x /tmp/9legacy-run/rc/bin/rc.local
 
-          send -- "echo __SYNC_STATUS__$status\r"
-          expect {
-            -re {__SYNC_STATUS__0} {}
-            timeout {send_user "sync script failed\n"; exit 1}
-          }
+          printf '\nsourcessecret=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
 
-          send -- "fshalt\r"
-          expect eof
-          EOT
+      - name: Boot 9legacy in QEMU
+        run: |
+          set -euo pipefail
+          cd /tmp/9legacy-run
+          ./boot/qemu
 
-          chmod +x /tmp/run-9legacy-sync.exp
-          /tmp/run-9legacy-sync.exp
+      - name: Validate sync result
+        run: |
+          set -euo pipefail
+          test -f /tmp/9legacy-run/sync-git4e-contrib.status
+          grep -qx 'ok' /tmp/9legacy-run/sync-git4e-contrib.status
+
+      - name: Remove runtime tree
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/9legacy-run
