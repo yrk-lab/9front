@@ -67,6 +67,24 @@ jobs:
 
           sudo umount /mnt/9legacy-iso
 
+          make -C sys/src/cmd/unix/u9fs
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('boot/qemu')
+          text = path.read_text()
+          old = "echo '# building u9fs' >&2\nmake -C ../sys/src/cmd/unix/u9fs\n"
+          new = (
+              "if [ ! -x ../sys/src/cmd/unix/u9fs/u9fs ]; then\n"
+              "\techo '# building u9fs' >&2\n"
+              "\tmake -C ../sys/src/cmd/unix/u9fs\n"
+              "fi\n"
+          )
+          if old not in text:
+              raise SystemExit('unexpected boot/qemu format while patching u9fs build step')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
           rm -rf .git
           mv /tmp/9legacy-build /tmp/9legacy-base
 
@@ -113,10 +131,35 @@ jobs:
           chmod +x /tmp/9legacy-run/rc/bin/rc.local
 
           pxe_cfg=/tmp/9legacy-run/cfg/pxe/525400123456
-          if ! grep -q '^menudefault=' "$pxe_cfg"; then
-            grep -qx '\[menu\]' "$pxe_cfg"
-            sed -i '/^\[menu\]$/a menudefault=text, 1' "$pxe_cfg"
-          fi
+          python3 - "$pxe_cfg" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          lines = text.splitlines()
+
+          replaced = False
+          for i, line in enumerate(lines):
+              if line.startswith('menudefault='):
+                  lines[i] = 'menudefault=text, 1'
+                  replaced = True
+                  break
+
+          if not replaced:
+              for i, line in enumerate(lines):
+                  if line.strip() == '[menu]':
+                      lines.insert(i + 1, 'menudefault=text, 1')
+                      replaced = True
+                      break
+
+          if not replaced:
+              raise SystemExit('missing [menu] section and no menudefault entry in PXE config')
+
+          path.write_text('\n'.join(lines) + '\n')
+          PY
+          echo "Patched PXE config at $pxe_cfg:"
+          sed -n '1,200p' "$pxe_cfg"
           printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> "$pxe_cfg"
 
       - name: Boot 9legacy in QEMU
