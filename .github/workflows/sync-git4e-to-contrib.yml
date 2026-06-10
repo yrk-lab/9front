@@ -130,68 +130,28 @@ jobs:
           EORC
           chmod +x /tmp/9legacy-run/rc/bin/rc.local
 
-          pxe_cfg=/tmp/9legacy-run/cfg/pxe/525400123456
-          python3 - "$pxe_cfg" <<'PY'
-          from pathlib import Path
-          import sys
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-          lines = text.splitlines()
-
-          # Replace an existing menudefault line, or insert one after the last
-          # menuitem= in the [menu] block. parsemenu() processes lines in order
-          # so menudefault must come AFTER all menuitem= lines it references.
-          replaced = False
-          for i, line in enumerate(lines):
-              if line.startswith('menudefault='):
-                  lines[i] = 'menudefault=text, 1'
-                  replaced = True
-                  break
-
-          if not replaced:
-              in_menu = False
-              last_menuitem = -1
-              for i, line in enumerate(lines):
-                  if line.strip() == '[menu]':
-                      in_menu = True
-                      continue
-                  if in_menu:
-                      if line.startswith('['):
-                          break
-                      if line.startswith('menuitem='):
-                          last_menuitem = i
-
-              if last_menuitem >= 0:
-                  lines.insert(last_menuitem + 1, 'menudefault=text, 1')
-                  replaced = True
-
-          if not replaced:
-              raise SystemExit('no [menu]/menuitem section found in PXE config')
-
-          # Remove lines from [text] that cause an interactive secondary boot
-          # prompt in unattended QEMU runs:
-          #   - bootfile=ether0!/sys/src/9k/k10/9k10f  (9front path absent from
-          #     9legacy's TFTP tree; boot failure triggers the prompt)
-          #   - debugboot=1  (explicitly forces the interactive bootfile menu,
-          #     overriding nobootprompt=tcp from [common])
-          in_text = False
-          filtered = []
-          for line in lines:
-              if line.strip() == '[text]':
-                  in_text = True
-              elif in_text and line.startswith('['):
-                  in_text = False
-              if in_text and (line.startswith('bootfile=') or line.startswith('debugboot=')):
-                  continue
-              filtered.append(line)
-          lines = filtered
-
-          path.write_text('\n'.join(lines) + '\n')
-          PY
-          echo "Patched PXE config at $pxe_cfg:"
-          sed -n '1,200p' "$pxe_cfg"
-          printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> "$pxe_cfg"
+          # Write a minimal plan9.ini for the QEMU PXE client.
+          # No menu, single 32-bit bootfile, nobootprompt — fully unattended.
+          cat > /tmp/9legacy-run/cfg/pxe/525400123456 <<'EOPXE'
+          bootfile=ether0!/386/9pc
+          fs=10.0.2.1
+          auth=10.0.2.1
+          sysname=gnot
+          *nobiosload=1
+          partition=new
+          factotumopts=-n
+          user=glenda
+          console=0
+          mouseport=ps2intellimouse
+          monitor=vesa
+          vgasize=none
+          *nomp=1
+          nobootprompt=tcp
+          EOPXE
+          printf 'SOURCES_SECRET=%s\n' "$SOURCES_SECRET" \
+            >> /tmp/9legacy-run/cfg/pxe/525400123456
+          echo "PXE config at /tmp/9legacy-run/cfg/pxe/525400123456:"
+          cat /tmp/9legacy-run/cfg/pxe/525400123456
 
       - name: Boot 9legacy in QEMU
         run: |
