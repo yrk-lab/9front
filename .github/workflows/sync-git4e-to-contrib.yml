@@ -169,6 +169,24 @@ jobs:
           if not replaced:
               raise SystemExit('no [menu]/menuitem section found in PXE config')
 
+          # Remove lines from [text] that cause an interactive secondary boot
+          # prompt in unattended QEMU runs:
+          #   - bootfile=ether0!/sys/src/9k/k10/9k10f  (9front path absent from
+          #     9legacy's TFTP tree; boot failure triggers the prompt)
+          #   - debugboot=1  (explicitly forces the interactive bootfile menu,
+          #     overriding nobootprompt=tcp from [common])
+          in_text = False
+          filtered = []
+          for line in lines:
+              if line.strip() == '[text]':
+                  in_text = True
+              elif in_text and line.startswith('['):
+                  in_text = False
+              if in_text and (line.startswith('bootfile=') or line.startswith('debugboot=')):
+                  continue
+              filtered.append(line)
+          lines = filtered
+
           path.write_text('\n'.join(lines) + '\n')
           PY
           echo "Patched PXE config at $pxe_cfg:"
