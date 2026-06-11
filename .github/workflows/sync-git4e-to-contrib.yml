@@ -105,7 +105,7 @@ jobs:
           mkdir -p /tmp/9legacy-run/github/9front
           rsync -a --delete "$GITHUB_WORKSPACE/" /tmp/9legacy-run/github/9front/
 
-          cat > /tmp/9legacy-run/rc/bin/rc.local <<'EORC'
+          cat > /tmp/9legacy-run/rc/bin/termrc.local <<'EORC'
           #!/bin/rc
           rfork e
 
@@ -128,7 +128,7 @@ jobs:
 
           fshalt
           EORC
-          chmod +x /tmp/9legacy-run/rc/bin/rc.local
+          chmod +x /tmp/9legacy-run/rc/bin/termrc.local
 
           # Write a minimal plan9.ini for the QEMU PXE client.
           # No menu, single 32-bit bootfile, nobootprompt — fully unattended.
