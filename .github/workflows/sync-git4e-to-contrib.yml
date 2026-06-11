@@ -83,6 +83,11 @@ jobs:
           if old not in text:
               raise SystemExit('unexpected boot/qemu format while patching u9fs build step')
           text = text.replace(old, new, 1)
+          old = 'u9fs="guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER .."\n'
+          new = 'u9fs="guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER"\n'
+          if old not in text:
+              raise SystemExit('unexpected boot/qemu format while patching u9fs export')
+          text = text.replace(old, new, 1)
           old = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio \\\n"
           new = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \\\n"
           if old not in text:
@@ -152,6 +157,7 @@ jobs:
           bootfile=ether0!/386/9pc
           fs=10.0.2.1
           auth=10.0.2.1
+          rootdir=/tmp/9legacy-run
           sysname=gnot
           *nobiosload=1
           partition=new
