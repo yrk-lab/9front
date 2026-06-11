@@ -1,6 +1,7 @@
 #!/bin/rc
 
 rfork e
+flag x +
 
 fn usage {
 	echo 'usage: sync-git4e-contrib.rc <9front-checkout-dir>' >[1=2]

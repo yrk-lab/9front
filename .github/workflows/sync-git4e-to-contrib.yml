@@ -82,6 +82,11 @@ jobs:
           )
           if old not in text:
               raise SystemExit('unexpected boot/qemu format while patching u9fs build step')
+          text = text.replace(old, new, 1)
+          old = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio \\\n"
+          new = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \\\n"
+          if old not in text:
+              raise SystemExit('unexpected boot/qemu format while patching qemu invocation')
           path.write_text(text.replace(old, new, 1))
           PY
 
@@ -115,15 +120,18 @@ jobs:
           if(! test -e /env/SOURCES_SECRET){
           	echo 'missing SOURCES_SECRET kernel parameter' >[1=2]
           	echo failed:nosecret > $statusfile
-          	fshalt
+          	reboot
           	exit nosecret
           }
 
           # Ensure the IP stack is configured and the connection server is
-          # running so that 9fs can resolve hostnames (e.g. sources.9p.io).
+          # DNS and the connection server are running so that 9fs can resolve
+          # hostnames (e.g. sources.9p.io).
           # termrc.local is sourced before the main termrc sets these up.
           if(! test -e /net/ipifc/0/ctl)
           	ip/ipconfig
+          if(! test -e /net/dns)
+          	ndb/dns -r
           if(! test -e /srv/cs && ! test -e /net/cs)
           	ndb/cs -f /lib/ndb/local
 
@@ -134,7 +142,7 @@ jobs:
           if not
           	echo failed:sync > $statusfile
 
-          fshalt
+          reboot
           EORC
           chmod +x /tmp/9legacy-run/rc/bin/termrc.local
 
