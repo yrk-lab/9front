@@ -109,7 +109,7 @@ jobs:
           #!/bin/rc
           rfork e
 
-          statusfile=/sync-git4e-contrib.status
+          statusfile=/usr/glenda/sync-git4e-contrib.status
           echo started > $statusfile
 
           if(! test -e /env/SOURCES_SECRET){
@@ -118,6 +118,14 @@ jobs:
           	fshalt
           	exit nosecret
           }
+
+          # Ensure the IP stack is configured and the connection server is
+          # running so that 9fs can resolve hostnames (e.g. sources.9p.io).
+          # termrc.local is sourced before the main termrc sets these up.
+          if(! test -e /net/ipifc/0/ctl)
+          	ip/ipconfig
+          if(! test -e /srv/cs && ! test -e /net/cs)
+          	ndb/cs -f /lib/ndb/local
 
           cd /github/9front
           .github/scripts/sync-git4e-contrib.rc /github/9front
@@ -168,8 +176,8 @@ jobs:
       - name: Validate sync result
         run: |
           set -euo pipefail
-          test -f /tmp/9legacy-run/sync-git4e-contrib.status
-          grep -qx 'ok' /tmp/9legacy-run/sync-git4e-contrib.status
+          test -f /tmp/9legacy-run/usr/glenda/sync-git4e-contrib.status
+          grep -qx 'ok' /tmp/9legacy-run/usr/glenda/sync-git4e-contrib.status
 
       - name: Remove runtime tree
         if: always()
