@@ -160,7 +160,7 @@ jobs:
           console=0
           mouseport=ps2intellimouse
           monitor=vesa
-          vgasize=none
+          vgasize=text
           *nomp=1
           nobootprompt=tcp
           EOPXE
