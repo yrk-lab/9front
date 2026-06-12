@@ -35,7 +35,7 @@ jobs:
 
       - name: Restore 9legacy cache
         id: cache-9legacy
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             /tmp/9legacy-base
@@ -97,6 +97,15 @@ jobs:
 
           rm -rf .git
           mv /tmp/9legacy-build /tmp/9legacy-base
+
+      - name: Save 9legacy cache
+        if: steps.cache-9legacy.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /tmp/9legacy-base
+            /tmp/9legacy.iso
+          key: 9legacy-qemu-base-${{ runner.os }}-894c7b3b8ade4b500862c45cc53be23a610faa36
 
       - name: Prepare runtime 9legacy tree
         env:
