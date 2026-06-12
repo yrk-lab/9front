@@ -153,10 +153,10 @@ jobs:
           *nomp=1
           nobootprompt=tcp
           EOPXE
+          echo "PXE config at /tmp/9legacy-run/cfg/pxe/525400123456 (before SOURCES_SECRET):"
+          cat /tmp/9legacy-run/cfg/pxe/525400123456
           printf 'SOURCES_SECRET=%s\n' "$SOURCES_SECRET" \
             >> /tmp/9legacy-run/cfg/pxe/525400123456
-          echo "PXE config at /tmp/9legacy-run/cfg/pxe/525400123456:"
-          cat /tmp/9legacy-run/cfg/pxe/525400123456
 
       - name: Boot 9legacy in QEMU
         run: |
