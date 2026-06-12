@@ -68,32 +68,6 @@ jobs:
           sudo umount /mnt/9legacy-iso
 
           make -C sys/src/cmd/unix/u9fs
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('boot/qemu')
-          text = path.read_text()
-          old = "echo '# building u9fs' >&2\nmake -C ../sys/src/cmd/unix/u9fs\n"
-          new = (
-              "if [ ! -x ../sys/src/cmd/unix/u9fs/u9fs ]; then\n"
-              "\techo '# building u9fs' >&2\n"
-              "\tmake -C ../sys/src/cmd/unix/u9fs\n"
-              "fi\n"
-          )
-          if old not in text:
-              raise SystemExit('unexpected boot/qemu format while patching u9fs build step')
-          text = text.replace(old, new, 1)
-          old = 'u9fs="guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER .."\n'
-          new = 'u9fs="guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER"\n'
-          if old not in text:
-              raise SystemExit('unexpected boot/qemu format while patching u9fs export')
-          text = text.replace(old, new, 1)
-          old = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio \\\n"
-          new = "qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \\\n"
-          if old not in text:
-              raise SystemExit('unexpected boot/qemu format while patching qemu invocation')
-          path.write_text(text.replace(old, new, 1))
-          PY
 
           rm -rf .git
           mv /tmp/9legacy-build /tmp/9legacy-base
@@ -187,8 +161,11 @@ jobs:
       - name: Boot 9legacy in QEMU
         run: |
           set -euo pipefail
-          cd /tmp/9legacy-run
-          if ! timeout --signal=TERM 45m ./boot/qemu; then
+          cd /tmp/9legacy-run/boot
+          if ! timeout --signal=TERM 45m qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \
+            -drive file=pxeboot.raw,format=raw -snapshot \
+            -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 \
+            -netdev "user,id=net0,guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER,tftp=.."; then
             status=$?
             if [ "$status" -eq 124 ]; then
               echo "QEMU run timed out after 45 minutes" >&2
