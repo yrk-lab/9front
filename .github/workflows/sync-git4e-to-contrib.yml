@@ -82,15 +82,8 @@ jobs:
           key: 9legacy-qemu-base-${{ runner.os }}-894c7b3b8ade4b500862c45cc53be23a610faa36
 
       - name: Prepare runtime 9legacy tree
-        env:
-          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
         run: |
           set -euo pipefail
-
-          if [ -z "${SOURCES_SECRET:-}" ]; then
-            echo "SOURCES_SECRET is not configured" >&2
-            exit 1
-          fi
 
           rm -rf /tmp/9legacy-run
           cp -a /tmp/9legacy-base /tmp/9legacy-run
@@ -134,6 +127,17 @@ jobs:
           EORC
           chmod +x /tmp/9legacy-run/rc/bin/termrc.local
 
+      - name: Boot 9legacy in QEMU
+        env:
+          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCES_SECRET:-}" ]; then
+            echo "SOURCES_SECRET is not configured" >&2
+            exit 1
+          fi
+
           # Write a minimal plan9.ini for the QEMU PXE client.
           # No menu, single 32-bit bootfile, nobootprompt — fully unattended.
           cat > /tmp/9legacy-run/cfg/pxe/525400123456 <<'EOPXE'
@@ -158,9 +162,6 @@ jobs:
           printf 'SOURCES_SECRET=%s\n' "$SOURCES_SECRET" \
             >> /tmp/9legacy-run/cfg/pxe/525400123456
 
-      - name: Boot 9legacy in QEMU
-        run: |
-          set -euo pipefail
           cd /tmp/9legacy-run/boot
           if ! timeout --signal=TERM 45m qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \
             -drive file=pxeboot.raw,format=raw -snapshot \
