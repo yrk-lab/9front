@@ -67,6 +67,10 @@ jobs:
 
           sudo umount /mnt/9legacy-iso
 
+          # Reset ownership after extracting files from the ISO so u9fs can
+          # export them as the invoking user.
+          sudo chown -R "$(id -u):$(id -g)" .
+
           make -C sys/src/cmd/unix/u9fs
 
           rm -rf .git
