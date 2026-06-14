@@ -35,7 +35,15 @@ if(~ $#SOURCES_SECRET 0){
 run cd $checkout
 run 9fs sources
 run /n/sources/contrib/fgb/root/rc/bin/contrib/install fgb/contrib
+echo 'debug: before contrib/install yk/git'
+echo '+ pwd'
+pwd
+echo '+ ls -ld /n/sources/contrib /n/sources/contrib/yk /n/sources/contrib/yk/git /dist/replica/git'
+ls -ld /n/sources/contrib /n/sources/contrib/yk /n/sources/contrib/yk/git /dist/replica/git
 run contrib/install yk/git
+echo 'debug: after contrib/install yk/git'
+echo '+ ls -ld /dist/replica/git /sys/src/cmd/git'
+ls -ld /dist/replica/git /sys/src/cmd/git
 run replica/pull -v -s/ /dist/replica/git
 run cd $checkout/sys/src/cmd/git
 run mk vendor
