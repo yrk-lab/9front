@@ -44,6 +44,15 @@ run contrib/install yk/git
 echo 'debug: after contrib/install yk/git'
 echo '+ ls -ld /dist/replica/git /sys/src/cmd/git'
 ls -ld /dist/replica/git /sys/src/cmd/git
+echo 'debug: before replica/pull - user/group and write targets'
+echo '+ cat /dev/user'
+cat /dev/user
+echo '+ cat /adm/users'
+cat /adm/users
+echo '+ ls -ld / /386 /386/bin /386/bin/git /dist /dist/replica /dist/replica/git /sys/src/cmd/git'
+ls -ld / /386 /386/bin /386/bin/git /dist /dist/replica /dist/replica/git /sys/src/cmd/git
+echo '+ ls -l /386/bin/git/add /dist/replica/git/386/bin/git/add /dist/replica/git/sys/src/cmd/git/add'
+ls -l /386/bin/git/add /dist/replica/git/386/bin/git/add /dist/replica/git/sys/src/cmd/git/add
 run replica/pull -v -s/ /dist/replica/git
 run cd $checkout/sys/src/cmd/git
 run mk vendor
