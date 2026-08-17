@@ -46,6 +46,7 @@ OFILES=\
 	ref.$O
 
 HFILES=git.h
+DIRS=aux
 
 </sys/src/cmd/mkmany
 
@@ -61,3 +62,35 @@ install:V:
 %.rcinstall:V:
 	cp $stem $BIN/$stem
 	chmod +x $BIN/$stem
+
+all:V:	all.dirs
+dirs:V: all.dirs
+install:V: install.dirs
+installall:V: installall.dirs
+clean:V: clean.dirs test.clean
+nuke:V: nuke.dirs
+test:V: test.dirs
+
+test:V: runtest
+runtest:V:
+	cd test && mk $MKFLAGS test
+
+test.clean:V:
+	cd test && mk $MKFLAGS clean
+
+vendor:V:
+	cp ../^(patch walk)^.c aux/
+	mkdir -p aux/diff/ aux/diff/test/
+	cp ../diff/*.[ch] aux/diff/
+	cp `{ls ../diff/test | grep -v mkfile} aux/diff/test/
+	cp ../mktest test/
+
+nuke:V:
+	rm -f *.[$OS] [$OS].??* $TARG test/mktest aux/walk.c aux/patch.c aux/diff/*.[ch] aux/diff/*.[$OS] aux/diff/[$OS].??* `{ls aux/diff/test | grep -v mkfile}
+
+%.dirs:V:
+	for(i in $DIRS) @{
+		cd $i
+		echo mk $i
+		mk $MKFLAGS $stem
+	}
