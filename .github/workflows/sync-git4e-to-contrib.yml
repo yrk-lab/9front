@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - git4e
+  pull_request:
+    branches:
+      - git4e
   workflow_dispatch:
 
 permissions:
@@ -32,7 +35,7 @@ jobs:
 
       - name: Restore 9legacy cache
         id: cache-9legacy
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             /tmp/9legacy-base
@@ -64,10 +67,71 @@ jobs:
 
           sudo umount /mnt/9legacy-iso
 
+          # Reset ownership after extracting files from the ISO so u9fs can
+          # export them as the invoking user.
+          sudo chown -R "$(id -u):$(id -g)" .
+
+          make -C sys/src/cmd/unix/u9fs
+
           rm -rf .git
           mv /tmp/9legacy-build /tmp/9legacy-base
 
+      - name: Save 9legacy cache
+        if: steps.cache-9legacy.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /tmp/9legacy-base
+            /tmp/9legacy.iso
+          key: 9legacy-qemu-base-${{ runner.os }}-894c7b3b8ade4b500862c45cc53be23a610faa36
+
       - name: Prepare runtime 9legacy tree
+        run: |
+          set -euo pipefail
+
+          rm -rf /tmp/9legacy-run
+          cp -a /tmp/9legacy-base /tmp/9legacy-run
+
+          mkdir -p /tmp/9legacy-run/github/9front
+          rsync -a --delete "$GITHUB_WORKSPACE/" /tmp/9legacy-run/github/9front/
+
+          cat > /tmp/9legacy-run/rc/bin/termrc.local <<'EORC'
+          #!/bin/rc
+          rfork e
+
+          statusfile=/usr/glenda/sync-git4e-contrib.status
+          echo started > $statusfile
+
+          if(! test -e /env/SOURCES_SECRET){
+          	echo 'missing SOURCES_SECRET kernel parameter' >[1=2]
+          	echo failed:nosecret > $statusfile
+          	reboot
+          	exit nosecret
+          }
+
+          # Ensure the IP stack is configured and the connection server is
+          # DNS and the connection server are running so that 9fs can resolve
+          # hostnames (e.g. sources.9p.io).
+          # termrc.local is sourced before the main termrc sets these up.
+          if(! test -e /net/ipifc/0/ctl)
+          	ip/ipconfig
+          if(! test -e /net/dns)
+          	ndb/dns -r
+          if(! test -e /srv/cs && ! test -e /net/cs)
+          	ndb/cs -f /lib/ndb/local
+
+          cd /github/9front
+          .github/scripts/sync-git4e-contrib.rc /github/9front
+          if(~ $status '')
+          	echo ok > $statusfile
+          if not
+          	echo failed:sync > $statusfile
+
+          reboot
+          EORC
+          chmod +x /tmp/9legacy-run/rc/bin/termrc.local
+
+      - name: Boot 9legacy in QEMU
         env:
           SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
         run: |
@@ -78,53 +142,50 @@ jobs:
             exit 1
           fi
 
-          rm -rf /tmp/9legacy-run
-          cp -a /tmp/9legacy-base /tmp/9legacy-run
+          # Write a minimal plan9.ini for the QEMU PXE client.
+          # No menu, single 32-bit bootfile, nobootprompt — fully unattended.
+          cat > /tmp/9legacy-run/cfg/pxe/525400123456 <<'EOPXE'
+          bootfile=ether0!/386/9pc
+          fs=10.0.2.1
+          auth=10.0.2.1
+          rootdir=/tmp/9legacy-run
+          sysname=gnot
+          *nobiosload=1
+          partition=new
+          factotumopts=-n
+          user=glenda
+          console=0
+          mouseport=ps2intellimouse
+          monitor=vesa
+          vgasize=text
+          *nomp=1
+          nobootprompt=tcp
+          EOPXE
+          echo "PXE config at /tmp/9legacy-run/cfg/pxe/525400123456 (before SOURCES_SECRET):"
+          cat /tmp/9legacy-run/cfg/pxe/525400123456
+          printf 'SOURCES_SECRET=%s\n' "$SOURCES_SECRET" \
+            >> /tmp/9legacy-run/cfg/pxe/525400123456
 
-          mkdir -p /tmp/9legacy-run/github/9front
-          rsync -a --delete "$GITHUB_WORKSPACE/" /tmp/9legacy-run/github/9front/
-
-          cat > /tmp/9legacy-run/rc/bin/rc.local <<'EORC'
-          #!/bin/rc
-          rfork e
-
-          statusfile=/sync-git4e-contrib.status
-          echo started > $statusfile
-
-          if(! test -e /env/SOURCES_SECRET){
-          	echo 'missing SOURCES_SECRET kernel parameter' >[1=2]
-          	echo failed:nosecret > $statusfile
-          	fshalt
-          	exit nosecret
-          }
-
-          cd /github/9front
-          .github/scripts/sync-git4e-contrib.rc /github/9front
-          if(~ $status '')
-          	echo ok > $statusfile
-          if not
-          	echo failed:sync > $statusfile
-
-          fshalt
-          EORC
-          chmod +x /tmp/9legacy-run/rc/bin/rc.local
-
-          printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
-
-      - name: Boot 9legacy in QEMU
-        run: |
-          set -euo pipefail
-          cd /tmp/9legacy-run
-          ./boot/qemu
+          cd /tmp/9legacy-run/boot
+          if ! timeout --signal=TERM 45m qemu-system-x86_64 -m 1G -smp 1 -serial stdio -no-reboot \
+            -drive file=pxeboot.raw,format=raw -snapshot \
+            -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 \
+            -netdev "user,id=net0,guestfwd=tcp:10.0.2.1:564-cmd:../sys/src/cmd/unix/u9fs/u9fs -a none -u $USER,tftp=.."; then
+            status=$?
+            if [ "$status" -eq 124 ]; then
+              echo "QEMU run timed out after 45 minutes" >&2
+            fi
+            exit "$status"
+          fi
 
       - name: Validate sync result
         run: |
           set -euo pipefail
-          test -f /tmp/9legacy-run/sync-git4e-contrib.status
-          grep -qx 'ok' /tmp/9legacy-run/sync-git4e-contrib.status
+          test -f /tmp/9legacy-run/usr/glenda/sync-git4e-contrib.status
+          grep -qx 'ok' /tmp/9legacy-run/usr/glenda/sync-git4e-contrib.status
 
       - name: Remove runtime tree
         if: always()
         run: |
           set -euo pipefail
-          rm -rf /tmp/9legacy-run
+          sudo rm -rf /tmp/9legacy-run
