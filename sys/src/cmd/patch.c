@@ -805,7 +805,8 @@ main(int argc, char **argv)
 			fail("open %s: %r", rejfile);
 	}
 	if(argc == 0){
-		if((f = Bfdopen(0, OREAD)) == nil)
+		f = emalloc(sizeof(Biobuf));
+		if(Binit(f, 0, OREAD) == -1)
 			fail("open stdin: %r");
 		if((p = parse(f, "stdin")) == nil)
 			fail("parse patch: %r");
@@ -817,6 +818,7 @@ main(int argc, char **argv)
 		}
 		freepatch(p);
 		Bterm(f);
+		free(f);
 		ok = finish(ok);
 	}else{
 		for(i = 0; ok && i < argc; i++){

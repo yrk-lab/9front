@@ -14,5 +14,12 @@ fn die {
 	}
 }
 
+fn diff {
+	git/aux/diff $*
+}
+fn patch {
+	git/aux/patch $*
+}
+
 rfork n
 bind $cputype.git /bin/git

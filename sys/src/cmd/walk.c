@@ -271,9 +271,10 @@ main(int argc, char **argv)
 
 	fmtinstall('M', dirmodefmt);
 
-	if((bout = Bfdopen(1, OWRITE)) == nil)
-		sysfatal("Bfdopen: %r");
-	Blethal(bout, nil);
+	if((bout = malloc(sizeof(Biobuf))) == nil)
+		sysfatal("malloc: %r");
+	if(Binit(bout, 1, OWRITE) == -1)
+		sysfatal("Binit: %r");
 	if(stfmt == nil){
 		if((stfmt = s_new()) == nil)
 			sysfatal("s_new: %r");
@@ -304,6 +305,7 @@ main(int argc, char **argv)
 		free(d);
 	}
 	Bterm(bout);
+	free(bout);
 
 	exits(nil);
 }

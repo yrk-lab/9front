@@ -1,0 +1,40 @@
+name: Sync front with upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-front:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout front branch
+        uses: actions/checkout@v4
+        with:
+          ref: front
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync front branch
+        env:
+          UPSTREAM_REPO: 9front/9front
+          UPSTREAM_BRANCH: front
+          TARGET_BRANCH: front
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          git checkout "${TARGET_BRANCH}"
+          git merge --ff-only "upstream/${UPSTREAM_BRANCH}"
+          git push origin "${TARGET_BRANCH}"
