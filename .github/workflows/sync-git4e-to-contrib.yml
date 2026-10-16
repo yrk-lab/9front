@@ -1,0 +1,130 @@
+name: Sync git4e to legacy contrib
+
+on:
+  push:
+    branches:
+      - git4e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-git4e-contrib:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout git4e branch
+        uses: actions/checkout@v4
+        with:
+          ref: git4e
+          fetch-depth: 1
+
+      - name: Install host dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            bzip2 \
+            curl \
+            rsync
+
+      - name: Restore 9legacy cache
+        id: cache-9legacy
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/9legacy-base
+            /tmp/9legacy.iso
+          key: 9legacy-qemu-base-${{ runner.os }}-894c7b3b8ade4b500862c45cc53be23a610faa36
+
+      - name: Build cached 9legacy base image
+        if: steps.cache-9legacy.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+
+          rm -rf /tmp/9legacy-base /tmp/9legacy-build
+          git clone --depth 1 --branch main https://github.com/0intro/9legacy.git /tmp/9legacy-build
+          cd /tmp/9legacy-build
+          git checkout 894c7b3b8ade4b500862c45cc53be23a610faa36
+
+          ./boot/mkdirs
+
+          curl -fsSL http://9legacy.org/download/9legacy.iso.bz2 | bunzip2 > /tmp/9legacy.iso
+          sudo mkdir -p /mnt/9legacy-iso
+          sudo mount -o loop /tmp/9legacy.iso /mnt/9legacy-iso
+
+          cp -a /mnt/9legacy-iso/386/bin/* 386/bin
+          cp -a /mnt/9legacy-iso/386/9* /mnt/9legacy-iso/386/init /mnt/9legacy-iso/386/mbr /mnt/9legacy-iso/386/pbs* 386
+          cp -a /mnt/9legacy-iso/amd64/bin/* amd64/bin
+          cp -a /mnt/9legacy-iso/amd64/9* /mnt/9legacy-iso/amd64/init amd64
+          cp -a /mnt/9legacy-iso/acme/bin/386/* acme/bin/386
+          cp -a /mnt/9legacy-iso/acme/bin/amd64/* acme/bin/amd64
+
+          sudo umount /mnt/9legacy-iso
+
+          rm -rf .git
+          mv /tmp/9legacy-build /tmp/9legacy-base
+
+      - name: Prepare runtime 9legacy tree
+        env:
+          SOURCES_SECRET: ${{ secrets.SOURCES_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCES_SECRET:-}" ]; then
+            echo "SOURCES_SECRET is not configured" >&2
+            exit 1
+          fi
+
+          rm -rf /tmp/9legacy-run
+          cp -a /tmp/9legacy-base /tmp/9legacy-run
+
+          mkdir -p /tmp/9legacy-run/github/9front
+          rsync -a --delete "$GITHUB_WORKSPACE/" /tmp/9legacy-run/github/9front/
+
+          cat > /tmp/9legacy-run/rc/bin/rc.local <<'EORC'
+          #!/bin/rc
+          rfork e
+
+          statusfile=/sync-git4e-contrib.status
+          echo started > $statusfile
+
+          if(! test -e /env/SOURCES_SECRET){
+          	echo 'missing SOURCES_SECRET kernel parameter' >[1=2]
+          	echo failed:nosecret > $statusfile
+          	fshalt
+          	exit nosecret
+          }
+
+          cd /github/9front
+          .github/scripts/sync-git4e-contrib.rc /github/9front
+          if(~ $status '')
+          	echo ok > $statusfile
+          if not
+          	echo failed:sync > $statusfile
+
+          fshalt
+          EORC
+          chmod +x /tmp/9legacy-run/rc/bin/rc.local
+
+          printf '\nSOURCES_SECRET=%s\n' "$SOURCES_SECRET" >> /tmp/9legacy-run/cfg/pxe/525400123456
+
+      - name: Boot 9legacy in QEMU
+        run: |
+          set -euo pipefail
+          cd /tmp/9legacy-run
+          ./boot/qemu
+
+      - name: Validate sync result
+        run: |
+          set -euo pipefail
+          test -f /tmp/9legacy-run/sync-git4e-contrib.status
+          grep -qx 'ok' /tmp/9legacy-run/sync-git4e-contrib.status
+
+      - name: Remove runtime tree
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/9legacy-run
