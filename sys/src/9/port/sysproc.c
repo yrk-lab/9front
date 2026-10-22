@@ -194,9 +194,11 @@ sysrfork(va_list list)
 		qunlock(&p->seglock);
 		nexterror();
 	}
-	for(i = 0; i < NSEG; i++)
-		if(up->seg[i] != nil)
-			p->seg[i] = dupseg(up->seg, i, n);
+	for(i = 0; i < NSEG; i++) {
+		Segment *s = dupseg(i, n);
+		if(s != nil)
+			attachseg(p, i, s);
+	}
 	qunlock(&p->seglock);
 	poperror();
 
@@ -326,8 +328,7 @@ sysexec(va_list list)
 		if(up->seg[SSEG] == nil)
 			pexit(up->errstr, 1);
 		qlock(&up->seglock);
-		s = up->seg[ESEG];
-		up->seg[ESEG] = nil;
+		s = detachseg(up, ESEG);
 		qunlock(&up->seglock);
 		if(s != nil) {
 			putseg(s);
@@ -371,7 +372,7 @@ sysexec(va_list list)
 		if(tstk <= USTKSIZE)
 			error(Enovmem);
 	} while((s = isoverlap(tstk-USTKSIZE, USTKSIZE)) != nil);
-	up->seg[ESEG] = newseg(SG_STACK | SG_NOEXEC, tstk-USTKSIZE, USTKSIZE/BY2PG);
+	attachseg(up, ESEG, newseg(SG_STACK | SG_NOEXEC, tstk-USTKSIZE, USTKSIZE/BY2PG));
 	qunlock(&up->seglock);
 	poperror();	/* up->seglock */
 
@@ -585,7 +586,6 @@ sysexec(va_list list)
 			nexterror();
 		}
 		ts = newseg(SG_TEXT | SG_RONLY, UTZERO, PGROUND(text)>>PGSHIFT);
-		ts->flushme = 1;
 		ts->image = img;
 		ts->fstart = 0;
 		ts->flen = text;
@@ -596,7 +596,7 @@ sysexec(va_list list)
 
 	/*
 	 * Committed.
-	 * Free old memory.
+	 * Free old memory. (in reverse order)
 	 * Special segments are maintained across exec
 	 */
 	qlock(&up->seglock);
@@ -605,25 +605,17 @@ sysexec(va_list list)
 		nexterror();
 	}
 
-	for(i = SSEG; i <= BSEG; i++) {
+	for(i = NSEG-1; i > ESEG; i--) {
 		s = up->seg[i];
-		if(s != nil) {
-			/* prevent a second free if we have an error */
-			up->seg[i] = nil;
-			putseg(s);
-		}
+		if(s != nil && (s->type&SG_CEXEC) != 0)
+			putseg(detachseg(up, i));
 	}
-	for(i = ESEG+1; i < NSEG; i++) {
-		s = up->seg[i];
-		if(s != nil && (s->type&SG_CEXEC) != 0) {
-			up->seg[i] = nil;
-			putseg(s);
-		}
-	}
+	for(i = ESEG-1; i >= 0; i--)
+		putseg(detachseg(up, i));
 
 	/* Text. Shared. */
 	assert(ts->ref > 0);
-	up->seg[TSEG] = ts;
+	attachseg(up, TSEG, ts);
 
 	/* Data. Shared. */
 	s = newseg(SG_DATA, adata, PGROUND(data)>>PGSHIFT);
@@ -631,20 +623,16 @@ sysexec(va_list list)
 	s->fstart = text;
 	s->flen = data;
 	incref(img);
-	up->seg[DSEG] = s;
+	attachseg(up, DSEG, s);
 
 	/* BSS. Zero fill on demand */
-	up->seg[BSEG] = newseg(SG_BSS, abss, (ebss - abss)>>PGSHIFT);
+	attachseg(up, BSEG, newseg(SG_BSS, abss, (ebss - abss)>>PGSHIFT));
 
 	/* Move the stack */
-	s = up->seg[ESEG];
-	up->seg[ESEG] = nil;
-	qlock(s);
-	s->base = USTKTOP-USTKSIZE;
-	s->top = USTKTOP;
-	relocateseg(s, USTKTOP-tstk);
-	qunlock(s);
-	up->seg[SSEG] = s;
+	s = detachseg(up, ESEG);
+	relocateseg(s, USTKTOP-USTKSIZE);
+	attachseg(up, SSEG, s);
+
 	qunlock(&up->seglock);
 
 	poperror();	/* up->seglock */
@@ -962,27 +950,25 @@ uintptr
 syssegbrk(va_list list)
 {
 	int i;
-	uintptr addr;
 	Segment *s;
 
-	addr = va_arg(list, uintptr);
-	for(i = 0; i < NSEG; i++) {
-		s = up->seg[i];
-		if(s == nil || addr < s->base || addr >= s->top)
-			continue;
-		switch(s->type&SG_TYPE) {
-		case SG_TEXT:
-		case SG_DATA:
-		case SG_STACK:
-		case SG_PHYSICAL:
-		case SG_FIXED:
-		case SG_STICKY:
-			error(Ebadarg);
-		default:
-			return ibrk(va_arg(list, uintptr), i);
-		}
+	s = seg(up, va_arg(list, uintptr), 0);
+	if(s == nil)
+		error(Ebadarg);
+
+	switch(s->type&SG_TYPE) {
+	default:
+		error(Ebadarg);
+	case SG_BSS:
+	case SG_SHARED:
+		break;
 	}
-	error(Ebadarg);
+
+	i = segno(up, s);
+	if(i < 0)
+		error(Ebadarg);
+
+	return ibrk(i, va_arg(list, uintptr));
 }
 
 uintptr
@@ -1013,10 +999,7 @@ uintptr
 syssegdetach(va_list list)
 {
 	int i;
-	uintptr addr;
 	Segment *s;
-
-	addr = va_arg(list, uintptr);
 
 	qlock(&up->seglock);
 	if(waserror()){
@@ -1024,30 +1007,22 @@ syssegdetach(va_list list)
 		nexterror();
 	}
 
-	for(i = 0; i < NSEG; i++)
-		if((s = up->seg[i]) != nil) {
-			qlock(s);
-			if((addr >= s->base && addr < s->top) ||
-			   (s->top == s->base && addr == s->base))
-				goto found;
-			qunlock(s);
-		}
+	s = seg(up, va_arg(list, uintptr), 0);
+	if(s == nil)
+		error(Ebadarg);
 
-	error(Ebadarg);
-
-found:
 	/*
 	 * Check we are not detaching the initial stack segment.
 	 */
-	if(s == up->seg[SSEG]){
-		qunlock(s);
+	i = segno(up, s);
+	if(i < 0 || i == SSEG)
 		error(Ebadarg);
-	}
-	qunlock(s);
-	up->seg[i] = nil;
-	putseg(s);
+
+	s = detachseg(up, i);
 	qunlock(&up->seglock);
 	poperror();
+
+	putseg(s);
 
 	/* Ensure we flush any entries from the lost segment */
 	flushmmu();
@@ -1055,40 +1030,32 @@ found:
 }
 
 uintptr
+syssegflush(va_list list)
+{
+	uintptr len;
+	void *va;
+
+	va = va_arg(list, void*);
+	len = va_arg(list, ulong);
+	return segflush(va, len);
+}
+
+uintptr
 syssegfree(va_list list)
 {
-	Segment *s;
-	uintptr from, to;
+	uintptr len;
+	void *va;
 
-	from = va_arg(list, uintptr);
-	to = va_arg(list, ulong);
-	to += from;
-	if(to < from)
-		error(Ebadarg);
-	s = seg(up, from, 1);
-	if(s == nil)
-		error(Ebadarg);
-	to &= ~(BY2PG-1);
-	from = PGROUND(from);
-	if(from >= to) {
-		qunlock(s);
-		return 0;
-	}
-	if(to > s->top) {
-		qunlock(s);
-		error(Ebadarg);
-	}
-	mfreeseg(s, from, (to - from) / BY2PG);
-	qunlock(s);
-	flushmmu();
-	return 0;
+	va = va_arg(list, void*);
+	len = va_arg(list, ulong);
+	return segfree(va, len);
 }
 
 /* For binary compatibility */
 uintptr
 sysbrk_(va_list list)
 {
-	return ibrk(va_arg(list, uintptr), BSEG);
+	return ibrk(BSEG, va_arg(list, uintptr));
 }
 
 uintptr
@@ -1428,13 +1395,13 @@ sys_nsec(va_list list)
 	/* return in register on 64bit machine */
 	if(sizeof(uintptr) == sizeof(vlong)){
 		USED(list);
-		return (uintptr)todget(nil, nil);
+		return (uintptr)nsec();
 	}
 
 	v = va_arg(list, vlong*);
 	evenaddr((uintptr)v);
 	validaddr((uintptr)v, sizeof(vlong), 1);
-	*v = todget(nil, nil);
+	*v = nsec();
 	return 0;
 }
 
@@ -1446,6 +1413,8 @@ dosyscall(ulong scallnr, Sargs *args, uintptr *retp)
 	vlong startns, stopns;
 	uintptr ret;
 	int s;
+	
+	SET(startns);
 
 	m->syscall++;
 
@@ -1465,7 +1434,7 @@ dosyscall(ulong scallnr, Sargs *args, uintptr *retp)
 			up->procctl = Proc_stopme;
 			procctl();
 			spllo();
-			todget(nil, &startns);
+			startns = uptime();
 		}
 		if(scallnr >= nsyscall || systab[scallnr] == nil){
 			postnote(up, 1, "sys: bad sys call", NDebug);
@@ -1498,7 +1467,7 @@ dosyscall(ulong scallnr, Sargs *args, uintptr *retp)
 	}
 	*retp = ret;
 	if(up->procctl == Proc_tracesyscall){
-		todget(nil, &stopns);
+		stopns = uptime();
 		sysretfmt(scallnr, (va_list)up->s.args, ret, startns, stopns);
 		splhi();
 		up->procctl = Proc_stopme;

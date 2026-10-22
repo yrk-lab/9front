@@ -16,8 +16,8 @@ enum {
 	MSG_KEXINIT = 20,
 	MSG_NEWKEYS,
 
-	MSG_ECDH_INIT = 30,
-	MSG_ECDH_REPLY,
+	MSG_KEX_GEN_INIT = 30,
+	MSG_KEX_GEN_REPLY,
 
 	MSG_USERAUTH_REQUEST = 50,
 	MSG_USERAUTH_FAILURE,
@@ -486,18 +486,27 @@ kdf(uchar *k, int nk, uchar *h, char x, uchar *out, int len)
 void
 kex(int gotkexinit)
 {
-	static char kexalgs[] = "curve25519-sha256,curve25519-sha256@libssh.org";
+	static char kexalgs[] = "mlkem768x25519-sha256,curve25519-sha256,curve25519-sha256@libssh.org";
 	static char cipheralgs[] = "chacha20-poly1305@openssh.com";
 	static char zipalgs[] = "none";
 	static char macalgs[] = "";
 	static char langs[] = "";
 
-	uchar cookie[16], x[32], yc[32], z[32], k[32+1], h[SHA2_256dlen], *ys, *ks, *sig;
+	uchar cookie[16], x[32], z[32], k[SHA2_256dlen], h[SHA2_256dlen], *ks, *sig;
 	uchar k12[2*ChachaKeylen];
-	int i, nk, nys, nks, nsig;
-	DigestState *ds;
+	int i, nk, nks, nsig;
+	DigestState *ds, *ds2;
 	mpint *S, *K;
 	RSApub *pub;
+	uchar sk[MLKEM768_secretbytes];
+	uchar ss[MLKEM_bytes];
+	uchar cinit[MLKEM768_publicbytes + 32];
+	uchar *sreply;
+	int nsreply;
+	char *ske, buf[384];
+	int nske;
+	int dohybrid;
+	uchar *w;
 
 	ds = hashstr(send.v, strlen(send.v), nil);	
 	ds = hashstr(recv.v, strlen(recv.v), ds);
@@ -519,15 +528,15 @@ kex(int gotkexinit)
 		0);
 	ds = hashstr(send.r, send.w-send.r, ds);
 
-	if(!gotkexinit){
-	Next0:	switch(recvpkt()){
-		default:
+	dohybrid = 0;
+	if(!gotkexinit)
+		while(recvpkt() != MSG_KEXINIT)
 			dispatch();
-			goto Next0;
-		case MSG_KEXINIT:
-			break;
-		}
-	}
+	if(unpack(recv.r+17, recv.w-(recv.r+17), "s", &ske, &nske) < 0)
+		sysfatal("could not unpack kexalgs");
+	snprint(buf, sizeof buf, "%.*s", nske, ske);
+	if(strstr(buf, "mlkem768x25519-sha256") != nil)
+		dohybrid = 1;
 	ds = hashstr(recv.r, recv.w-recv.r, ds);
 
 	if(debug){
@@ -548,28 +557,37 @@ kex(int gotkexinit)
 		}
 	}
 
-	curve25519_dh_new(x, yc);
-	yc[31] &= ~0x80;
+	w = cinit;
+	if(dohybrid){
+		if(mlkem768_keypair(w, sk) < 0)
+			sysfatal("keypair");
+		w += MLKEM768_publicbytes;
+	}
+	curve25519_dh_new(x, w);
+	w[31] &= ~0x80;
+	w += 32;
 
-	sendpkt("bs", MSG_ECDH_INIT, yc, sizeof(yc));
+	sendpkt("bs", MSG_KEX_GEN_INIT, cinit, w - cinit);
 Next1:	switch(recvpkt()){
 	default:
 		dispatch();
 		goto Next1;
 	case MSG_KEXINIT:
 		sysfatal("inception");
-	case MSG_ECDH_REPLY:
-		if(unpack(recv.r, recv.w-recv.r, "_sss", &ks, &nks, &ys, &nys, &sig, &nsig) < 0)
-			sysfatal("bad ECDH_REPLY");
+	case MSG_KEX_GEN_REPLY:
+		if(unpack(recv.r, recv.w-recv.r, "_sss", &ks, &nks, &sreply, &nsreply, &sig, &nsig) < 0)
+			sysfatal("bad kex reply");
 		break;
 	}
 
-	if(nys != 32)
+	if(dohybrid && nsreply != MLKEM768_cipherbytes + 32)
+		sysfatal("bad server MLKEM/ECDH length");
+	if(!dohybrid && nsreply != 32)
 		sysfatal("bad server ECDH ephermal public key length");
 
 	ds = hashstr(ks, nks, ds);
-	ds = hashstr(yc, 32, ds);
-	ds = hashstr(ys, 32, ds);
+	ds = hashstr(cinit, w - cinit, ds);
+	ds = hashstr(sreply, nsreply, ds);
 
 	if(thumb[0] == 0){
 		Thumbprint *ok;
@@ -600,14 +618,27 @@ Next1:	switch(recvpkt()){
 	if((S = ssh2rsasig(sig, nsig)) == nil)
 		sysfatal("bad server signature");
 
-	if(!curve25519_dh_finish(x, ys, z))
+	w = sreply;
+	if(dohybrid){
+		if(mlkem768_dec(ss, w, sk) < 0)
+			sysfatal("bad mlkem768");
+		w += MLKEM768_cipherbytes;
+	}
+
+	if(!curve25519_dh_finish(x, w, z))
 		sysfatal("unlucky shared key");
 
-	K = betomp(z, 32, nil);
-	nk = (mpsignif(K)+8)/8;
-	mptober(K, k, nk);
-	mpfree(K);
-
+	if(!dohybrid){
+		K = betomp(z, 32, nil);
+		nk = (mpsignif(K)+8)/8;
+		mptober(K, k, nk);
+		mpfree(K);
+	} else {
+		ds2 = sha2_256(ss, sizeof(ss), nil, nil);
+		ds2 = sha2_256(z, 32, nil, ds2);
+		sha2_256(nil, 0, k, ds2);
+		nk = sizeof(k);
+	}
 	ds = hashstr(k, nk, ds);
 	sha2_256(nil, 0, h, ds);
 	if(!pkcs1verify(h, sizeof(h), pub, S))
@@ -1028,7 +1059,7 @@ dispatch(void)
 		if(c != recv.chan)
 			break;
 		send.win += n;
-		if(send.win >= send.pkt)
+		if(send.win >= 0)
 			rwakeup(&send);
 		return;
 	case MSG_CHANNEL_REQUEST:
@@ -1176,7 +1207,7 @@ void
 main(int argc, char *argv[])
 {
 	static QLock sl;
-	int b, n, c;
+	int b, n, c, l, o;
 	char *s;
 
 	quotefmtinstall();
@@ -1406,7 +1437,7 @@ Mux:
 	for(;;){
 		static uchar buf[MaxPacket];
 		qunlock(&sl);
-		n = read(0, buf, send.pkt);
+		n = read(0, buf, sizeof(buf));
 		qlock(&sl);
 		if(send.eof)
 			break;
@@ -1439,12 +1470,25 @@ Mux:
 			sendpkt("[", buf, n);
 			continue;
 		}
-		send.win -= n;
-		while(send.win < 0)
-			rsleep(&send);
-		sendpkt("bus", MSG_CHANNEL_DATA,
-			send.chan,
-			buf, n);
+		/*
+		 * we need to chunk the writes because dropbear
+		 * doesn't quite conform to the spec; servers
+		 * are supposed to be able to handle a 32k packet
+		 * at minimum, but dropbear sets the window to 24k,
+		 * so we can't write it out all at once.
+		 */
+		o = 0;
+		while(n > 0){
+			while(send.win == 0)
+				rsleep(&send);
+			l = send.win < n ? send.win : n;
+			sendpkt("bus", MSG_CHANNEL_DATA,
+				send.chan,
+				buf+o, l);
+			send.win -= l;
+			o += l;
+			n -= l;
+		}
 	}
 	if(send.eof++ == 0 && !mux)
 		sendpkt("bu", raw ? MSG_CHANNEL_CLOSE : MSG_CHANNEL_EOF, send.chan);

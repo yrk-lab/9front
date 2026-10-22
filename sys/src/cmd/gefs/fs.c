@@ -2336,26 +2336,28 @@ readfile(Fmsg *m, Fid *f, Fcall *r)
 static void
 fsread(Fmsg *m)
 {
+	char rbuf[IOUNIT];
 	Fcall r;
 	Fid *f;
 
 	if((f = getfid(m->conn, m->fid)) == nil)
 		error(Enofid);
+	if(waserror()){
+		putfid(f);
+		nexterror();
+	}
 	if(f->dent->gone)
 		error(Ephase);
 	if(f->mode == -1)
 		error(Eopen);
 	if(m->offset < 0)
 		error(Eoffset);
+	if(m->count > sizeof(rbuf))
+		error(Ebotch);
 	r.type = Rread;
 	r.count = 0;
 	r.data = nil;
-	if(waserror()){
-		free(r.data);
-		putfid(f);
-		nexterror();
-	}	
-	r.data = emalloc(m->count, 0);
+	r.data = rbuf;
 	if(f->dent->qid.type & QTAUTH)
 		authread(f, &r, r.data, m->count);
 	else if(f->dent->qid.path == Qdump)
@@ -2369,7 +2371,6 @@ fsread(Fmsg *m)
 	putfid(f);
 	poperror();
 	respond(m, &r);
-	free(r.data);
 }
 
 static void
@@ -2908,7 +2909,9 @@ drainsyncq(void)
 		 * make sure that blocks released by epochclean
 		 * make it through the syncer into the deadlists
 		 */
+		qlock(&fs->synclk);
 		wrwait();
+		qunlock(&fs->synclk);
 		if(sync())
 			break;
 	}

@@ -98,12 +98,7 @@ setupuser(AuthInfo *ai)
 		bye(Ecantstart);
 		break;
 	case 0:
-if(!strstr(argv0, "8.out"))
 		execl("/bin/upas/fs", "upas/fs", "-np", nil);
-else{
-ilog("using /sys/src/cmd/upas/fs/8.out");
-execl("/sys/src/cmd/upas/fs/8.out", "upas/fs", "-np", nil);
-}
 		_exits(0);
 		break;
 	default:
@@ -145,6 +140,8 @@ authresp(void)
 		return nil;
 	s = binalloc(&parsebin, n + 1, 1);
 	n = dec64((uchar*)s, n, t, n);
+	if(n < 0)
+		return nil;
 	s[n] = 0;
 	return s;
 }
@@ -258,7 +255,7 @@ niltokenize(char *buf, int n, char **f, int nelemf)
 char*
 plainauth(char *ch)
 {
-	char buf[256*3 + 2], *f[4];
+	char buf[256*3 + 3], *f[4];
 	int n, nf;
 
 	if(ch == nil){
@@ -269,7 +266,10 @@ plainauth(char *ch)
 	}
 	if(ch == nil || strlen(ch) == 0)
 		return Ecancel;
-	n  = dec64((uchar*)buf, sizeof buf, ch, strlen(ch));
+	n  = dec64((uchar*)buf, sizeof buf - 1, ch, strlen(ch));
+	if(n < 0)
+		return Ebadau;
+	buf[n] = 0;
 	nf = niltokenize(buf, n, f, nelem(f));
 	if(nf != 3)
 		return Ebadau;

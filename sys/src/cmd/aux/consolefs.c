@@ -12,10 +12,11 @@
  */
 
 typedef struct Console Console;
+
+typedef struct Fs Fs;
 typedef struct Fid Fid;
 typedef struct Request Request;
 typedef struct Reqlist Reqlist;
-typedef struct Fs Fs;
 
 enum
 {
@@ -27,6 +28,7 @@ enum
 	Qdata,
 
 	Bufsize=	32*1024,	/* chars buffered per reader */
+	Stacksize=	2*Bufsize+1024,
 	Maxcons=	64,		/* maximum consoles */
 	Nhash=		64,		/* Fid hash buckets */
 };
@@ -39,7 +41,6 @@ struct Request
 {
 	Request	*next;
 	Fid	*fid;
-	Fs	*fs;
 	Fcall	f;
 	uchar	buf[1];
 };
@@ -59,10 +60,11 @@ struct Fid
 	int	fid;
 	int	ref;
 
+	Fs	*fs;
 	int	attached;
 	int	open;
 	char	*user;
-	char	mbuf[Bufsize];		/* message */
+	char	mbuf[1024];		/* user message for chat */
 	int	bufn;
 	int	used;
 	Qid	qid;
@@ -74,6 +76,15 @@ struct Fid
 	char	*wp;
 
 	Reqlist	r;			/* active read requests */
+};
+
+struct Fs
+{
+	Lock;
+
+	int	fd;			/* to kernel mount point */
+	int	messagesize;
+	Fid	*hash[Nhash];
 };
 
 struct Console
@@ -96,44 +107,38 @@ struct Console
 	Fid	*flist;			/* open fids to broadcast to */
 };
 
-struct Fs
-{
-	Lock;
+int	ncons;
+Console	*cons[Maxcons];
 
-	int	fd;			/* to kernel mount point */
-	int	messagesize;
-	Fid	*hash[Nhash];
-	Console	*cons[Maxcons];
-	int	ncons;
-};
+void	readdb(void);
+void	refreshdb(void);
+void	console(char*, char*, int, int, int);
+int	reopen(Console*);
+void	consolereader(void*);
 
-extern	void	console(Fs*, char*, char*, int, int, int);
-extern	Fs*	fsmount(char*);
+void	kick(Fid*);
 
-extern	void	fsreader(void*);
-extern	void	fsrun(void*);
-extern	Fid*	fsgetfid(Fs*, int);
-extern	void	fsputfid(Fs*, Fid*);
-extern	int	fsdirgen(Fs*, Qid, int, Dir*, uchar*, int);
-extern	void	fsreply(Fs*, Request*, char*);
-extern	void	fskick(Fs*, Fid*);
-extern	int	fsreopen(Fs*, Console*);
+Fs*	fsmount(char*);
+void	fsrun(void*);
+Fid*	fsgetfid(Fs*, int);
+void	fsputfid(Fs*, Fid*);
+int	fsdirgen(Fs*, Qid, int, Dir*, uchar*, int);
+void	fsreply(Fs*, Request*, char*);
 
-extern	void	fsversion(Fs*, Request*, Fid*);
-extern	void	fsflush(Fs*, Request*, Fid*);
-extern	void	fsauth(Fs*, Request*, Fid*);
-extern	void	fsattach(Fs*, Request*, Fid*);
-extern	void	fswalk(Fs*, Request*, Fid*);
-extern	void	fsclwalk(Fs*, Request*, Fid*);
-extern	void	fsopen(Fs*, Request*, Fid*);
-extern	void	fscreate(Fs*, Request*, Fid*);
-extern	void	fsread(Fs*, Request*, Fid*);
-extern	void	fswrite(Fs*, Request*, Fid*);
-extern	void	fsclunk(Fs*, Request*, Fid*);
-extern	void	fsremove(Fs*, Request*, Fid*);
-extern	void	fsstat(Fs*, Request*, Fid*);
-extern	void	fswstat(Fs*, Request*, Fid*);
-
+void	fsversion(Fs*, Request*, Fid*);
+void	fsflush(Fs*, Request*, Fid*);
+void	fsauth(Fs*, Request*, Fid*);
+void	fsattach(Fs*, Request*, Fid*);
+void	fswalk(Fs*, Request*, Fid*);
+void	fsclwalk(Fs*, Request*, Fid*);
+void	fsopen(Fs*, Request*, Fid*);
+void	fscreate(Fs*, Request*, Fid*);
+void	fsread(Fs*, Request*, Fid*);
+void	fswrite(Fs*, Request*, Fid*);
+void	fsclunk(Fs*, Request*, Fid*);
+void	fsremove(Fs*, Request*, Fid*);
+void	fsstat(Fs*, Request*, Fid*);
+void	fswstat(Fs*, Request*, Fid*);
 
 void 	(*fcall[])(Fs*, Request*, Fid*) =
 {
@@ -162,52 +167,19 @@ char Enofid[] = "no such fid";
 char *consoledb = "/lib/ndb/consoledb";
 char *mntpt = "/mnt/consoles";
 
-int messagesize = 8192+IOHDRSZ;
-
-void
-fatal(char *fmt, ...)
-{
-	va_list arg;
-	char buf[1024];
-
-	write(2, "consolefs: ", 10);
-	va_start(arg, fmt);
-	vseprint(buf, buf+1024, fmt, arg);
-	va_end(arg);
-	write(2, buf, strlen(buf));
-	write(2, "\n", 1);
-	threadexitsall(fmt);
-}
-
-
 void*
-emalloc(uint n)
+emallocz(uint n, int zero)
 {
 	void *p;
 
-	p = malloc(n);
+	p = mallocz(n, zero);
 	if(p == nil)
-		fatal("malloc failed: %r");
-	memset(p, 0, n);
+		sysfatal("malloc failed: %r");
 	return p;
 }
 
 int debug;
 Ndb *db;
-
-/*
- *  any request that can get queued for a delayed reply
- */
-Request*
-allocreq(Fs *fs, int bufsize)
-{
-	Request *r;
-
-	r = emalloc(sizeof(Request)+bufsize);
-	r->fs = fs;
-	r->next = nil;
-	return r;
-}
 
 /*
  *  for maintaining lists of requests
@@ -273,7 +245,7 @@ parentqid(Qid q)
 }
 
 int
-fsdirgen(Fs *fs, Qid parent, int i, Dir *d, uchar *buf, int nbuf)
+fsdirgen(Fs*, Qid parent, int i, Dir *d, uchar *buf, int nbuf)
 {
 	static char name[64];
 	char *p;
@@ -281,8 +253,7 @@ fsdirgen(Fs *fs, Qid parent, int i, Dir *d, uchar *buf, int nbuf)
 
 	d->uid = d->gid = d->muid = "network";
 	d->length = 0;
-	d->atime = time(nil);
-	d->mtime = d->atime;
+	d->atime = d->mtime = db->mtime;
 	d->type = 'C';
 	d->dev = '0';
 
@@ -298,12 +269,12 @@ fsdirgen(Fs *fs, Qid parent, int i, Dir *d, uchar *buf, int nbuf)
 		break;
 	case Ttopdir:
 		xcons = i/3;
-		if(xcons >= fs->ncons)
+		if(xcons >= ncons)
 			return -1;
-		p = fs->cons[xcons]->name;
+		p = cons[xcons]->name;
 		switch(i%3){
 		case 0:
-			if(fs->cons[xcons]->cfd < 0)
+			if(cons[xcons]->cfd < 0)
 				return 0;
 			snprint(name, sizeof name, "%sctl", p);
 			p = name;
@@ -312,7 +283,7 @@ fsdirgen(Fs *fs, Qid parent, int i, Dir *d, uchar *buf, int nbuf)
 			d->qid.vers = 0;
 			break;
 		case 1:
-			if(fs->cons[xcons]->sfd < 0)
+			if(cons[xcons]->sfd < 0)
 				return 0;
 			snprint(name, sizeof name, "%sstat", p);
 			p = name;
@@ -349,31 +320,30 @@ fsmount(char *mntpt)
 	int n;
 	static void *v[2];
 
-	fs = emalloc(sizeof(Fs));
+	fs = emallocz(sizeof(Fs), 1);
 
 	if(pipe(pfd) < 0)
-		fatal("opening pipe: %r");
+		sysfatal("opening pipe: %r");
 
-	/* start up the file system process */
-	v[0] = fs;
-	v[1] = pfd;
-	proccreate(fsrun, v, 16*1024);
+	fs->fd = pfd[0];
+	proccreate(fsrun, fs, Stacksize);
 
 	/* Typically mounted before /srv exists */
 	if(access("/srv/consoles", AEXIST) < 0){
 		srv = create("/srv/consoles", OWRITE, 0666);
 		if(srv < 0)
-			fatal("post: %r");
+			sysfatal("post: %r");
 
-		n = sprint(buf, "%d", pfd[1]);
+		n = snprint(buf, sizeof(buf), "%d", pfd[1]);
 		if(write(srv, buf, n) < 0)
-			fatal("write srv: %r");
+			sysfatal("write srv: %r");
 
 		close(srv);
 	}
 
 	mount(pfd[1], -1, mntpt, MBEFORE, "");
 	close(pfd[1]);
+
 	return fs;
 }
 
@@ -381,12 +351,12 @@ fsmount(char *mntpt)
  *  reopen a console
  */
 int
-fsreopen(Fs* fs, Console *c)
+reopen(Console *c)
 {
 	char buf[128];
-	static void *v[2];
 
 	if(c->pid){
+		if(c->pid > 0)
 		if(postnote(PNPROC, c->pid, "reopen") != 0)
 			fprint(2, "postnote failed: %r\n");
 		c->pid = 0;
@@ -415,15 +385,15 @@ fsreopen(Fs* fs, Console *c)
 	snprint(buf, sizeof(buf), "%sstat", c->dev);
 	c->sfd = open(buf, OREAD);
 
-	v[0] = fs;
-	v[1] = c;
-	proccreate(fsreader, v, 16*1024);
+	c->pid = -1;
+	if(!c->chat)
+		proccreate(consolereader, c, Stacksize);
 
 	return 0;
 }
 
 void
-change(Fs *fs, Console *c, int doreopen, int speed, int cronly, int ondemand)
+change(Console *c, int doreopen, int speed, int cronly, int ondemand)
 {
 	lock(c);
 
@@ -437,7 +407,7 @@ change(Fs *fs, Console *c, int doreopen, int speed, int cronly, int ondemand)
 	}
 	c->cronly = cronly;
 	if(doreopen)
-		fsreopen(fs, c);
+		reopen(c);
 
 	unlock(c);
 }
@@ -446,18 +416,18 @@ change(Fs *fs, Console *c, int doreopen, int speed, int cronly, int ondemand)
  *  create a console interface
  */
 void
-console(Fs* fs, char *name, char *dev, int speed, int cronly, int ondemand)
+console(char *name, char *dev, int speed, int cronly, int ondemand)
 {
 	Console *c;
 	char *x;
 	int i, doreopen;
 
-	if(fs->ncons >= Maxcons)
-		fatal("too many consoles, too little time");
+	if(ncons >= Maxcons)
+		sysfatal("too many consoles, too little time");
 
 	doreopen = 0;
-	for(i = 0; i < fs->ncons; i++){
-		c = fs->cons[i];
+	for(i = 0; i < ncons; i++){
+		c = cons[i];
 		if(strcmp(name, c->name) == 0){
 			if(strcmp(dev, c->dev) != 0){
 				/* new device */
@@ -466,7 +436,7 @@ console(Fs* fs, char *name, char *dev, int speed, int cronly, int ondemand)
 				free(x);
 				doreopen = 1;
 			}
-			change(fs, c, doreopen, speed, cronly, ondemand);
+			change(c, doreopen, speed, cronly, ondemand);
 			return;
 		}
 	}
@@ -483,21 +453,19 @@ console(Fs* fs, char *name, char *dev, int speed, int cronly, int ondemand)
 	 * 	speed=115200
 	 * 	openondemand=1
 	 */
-	for(i = 0; i < fs->ncons; i++){
-		c = fs->cons[i];
+	for(i = 0; i < ncons; i++){
+		c = cons[i];
 		if(strcmp(dev, c->dev) == 0){
 			/* at least a rename */
 			x = c->name;
 			c->name = strdup(name);
 			free(x);
-			change(fs, c, doreopen, speed, cronly, ondemand);
+			change(c, doreopen, speed, cronly, ondemand);
 			return;
 		}
 	}
 #endif
-	c = emalloc(sizeof(Console));
-	fs->cons[fs->ncons] = c;
-	fs->ncons++;
+	c = emallocz(sizeof(Console), 1);
 	c->name = strdup(name);
 	c->dev = strdup(dev);
 	if(strcmp(c->dev, "/dev/null") == 0) 
@@ -507,7 +475,10 @@ console(Fs* fs, char *name, char *dev, int speed, int cronly, int ondemand)
 	c->fd = -1;
 	c->cfd = -1;
 	c->sfd = -1;
-	change(fs, c, 1, speed, cronly, ondemand);
+
+	cons[ncons++] = c;
+
+	change(c, 1, speed, cronly, ondemand);
 }
 
 /*
@@ -549,29 +520,43 @@ fromconsole(Fid *f, char *p, int n)
 }
 
 /*
+ *  broadcast a message to all listeners
+ */
+void
+bcastmsg(Console *c, char *msg, int n)
+{
+	Fid *fl;
+
+	for(fl = c->flist; fl != nil; fl = fl->cnext){
+		fromconsole(fl, msg, n);
+		kick(fl);
+	}
+}
+
+/*
  *  broadcast a list of members to all listeners
  */
 void
-bcastmembers(Fs *fs, Console *c, char *msg, Fid *f)
+bcastmembers(Fid *f, char *msg)
 {
-	int n;
 	Fid *fl;
-	char buf[512];
+	int n;
 
-	sprint(buf, "[%s%s", msg, f->user);
-	for(fl = c->flist; fl != nil && strlen(buf) + 64 < sizeof(buf); fl = fl->cnext){
+	n = snprint(f->mbuf, sizeof(f->mbuf), "[%s%s", msg, f->user);
+	for(fl = f->c->flist; fl != nil; fl = fl->cnext){
 		if(f == fl)
 			continue;
-		strcat(buf, ", ");
-		strcat(buf, fl->user);
+		n += snprint(f->mbuf+n, sizeof(f->mbuf)-n, ", %s", fl->user);
 	}
-	strcat(buf, "]\n");
+	n += snprint(f->mbuf+n, sizeof(f->mbuf)-n, "]\n");
+	bcastmsg(f->c, f->mbuf, n);
+}
 
-	n = strlen(buf);
-	for(fl = c->flist; fl; fl = fl->cnext){
-		fromconsole(fl, buf, n);
-		fskick(fs, fl);
-	}
+void
+initmsguser(Fid *f)
+{
+	f->bufn = snprint(f->mbuf, sizeof(f->mbuf), "[%s] ", f->user);
+	f->used = 0;
 }
 
 void
@@ -587,43 +572,32 @@ handler(void*, char *msg)
  *  a process to read console output and broadcast it (one per console)
  */
 void
-fsreader(void *v)
+consolereader(void *a)
 {
+	char buf[Bufsize];
 	int n;
-	Fid *fl;
-	char buf[1024];
-	Fs *fs;
 	Console *c;
-	void **a;
 
-	a = v;
-	fs = a[0];
-	c = a[1];
+	c = (Console*)a;
 	c->pid = getpid();
+	threadsetname("%s %s", c->name, c->dev);
 	notify(handler);
-	if(c->chat)
-		threadexits(nil);
 	for(;;){
 		n = read(c->fd, buf, sizeof(buf));
 		if(n < 0)
 			break;
 		lock(c);
-		for(fl = c->flist; fl; fl = fl->cnext){
-			fromconsole(fl, buf, n);
-			fskick(fs, fl);
-		}
+		bcastmsg(c, buf, n);
 		unlock(c);
 	}
 }
 
 void
-readdb(Fs *fs)
+readdb(void)
 {
 	Ndbtuple *t, *nt;
 	char *dev, *cons;
 	int cronly, speed, ondemand;
-
-	ndbreopen(db);
 
 	/* start a listener for each console */
 	for(;;){
@@ -648,46 +622,51 @@ readdb(Fs *fs)
 				ondemand = 1;
 		}
 		if(dev != nil && cons != nil)
-			console(fs, cons, dev, speed, cronly, ondemand);
+			console(cons, dev, speed, cronly, ondemand);
 		ndbfree(t);
 	}
 }
 
-int dbmtime;
+void
+refreshdb(void)
+{
+	if(ndbchanged(db)){
+		ndbreopen(db);
+		readdb();
+	}
+}
 
 /*
  *  a request processor (one per Fs)
  */
 void
-fsrun(void *v)
+fsrun(void *a)
 {
 	int n, t;
 	Request *r;
 	Fid *f;
-	Dir *d;
-	void **a = v;
 	Fs* fs;
-	int *pfd;
 
-	fs = a[0];
-	pfd = a[1];
-	fs->fd = pfd[0];
+	threadsetname("%s", consoledb);
+
+	fs = (Fs*)a;
+	fs->messagesize = Bufsize+IOHDRSZ;
+
+	n = iounit(fs->fd);
+	if(n > 256 || n < fs->messagesize)
+		fs->messagesize = n;
+
 	notify(handler);
 	for(;;){
-		d = dirstat(consoledb);
-		if(d != nil && d->mtime != dbmtime){
-			dbmtime = d->mtime;
-			readdb(fs);
-		}
-		free(d);
-		r = allocreq(fs, messagesize);
-		n = read9pmsg(fs->fd, r->buf, messagesize);
+		r = emallocz(sizeof(Request) + fs->messagesize, 0);
+		memset(r, 0, sizeof(Request));
+		n = read9pmsg(fs->fd, r->buf, fs->messagesize);
 		if(n == 0)
 			threadexitsall("unmounted");
 		if(n < 0)
-			fatal("mount read: %r");
+			sysfatal("mount read: %r");
 		if(convM2S(r->buf, n, &r->f) != n)
-			fatal("convM2S format error: %r");
+			sysfatal("convM2S format error: %r");
 
 		f = fsgetfid(fs, r->f.fid);
 		r->fid = f;
@@ -706,7 +685,7 @@ fsgetfid(Fs *fs, int fid)
 	Fid *f, *nf;
 
 	lock(fs);
-	for(f = fs->hash[fid%Nhash]; f; f = f->next){
+	for(f = fs->hash[fid%Nhash]; f != nil; f = f->next){
 		if(f->fid == fid){
 			f->ref++;
 			unlock(fs);
@@ -714,11 +693,12 @@ fsgetfid(Fs *fs, int fid)
 		}
 	}
 
-	nf = emalloc(sizeof(Fid));
+	nf = emallocz(sizeof(Fid), 1);
 	nf->next = fs->hash[fid%Nhash];
 	fs->hash[fid%Nhash] = nf;
 	nf->fid = fid;
 	nf->ref = 1;
+	nf->fs = fs;
 	nf->wp = nf->buf;
 	nf->rp = nf->wp;
 	unlock(fs);
@@ -730,12 +710,13 @@ fsputfid(Fs *fs, Fid *f)
 {
 	Fid **l, *nf;
 
+	assert(f->fs == fs);
 	lock(fs);
 	if(--f->ref > 0){
 		unlock(fs);
 		return;
 	}
-	for(l = &fs->hash[f->fid%Nhash]; nf = *l; l = &nf->next)
+	for(l = &fs->hash[f->fid%Nhash]; (nf = *l) != nil; l = &nf->next)
 		if(nf == f){
 			*l = f->next;
 			break;
@@ -759,10 +740,9 @@ fsversion(Fs *fs, Request *r, Fid*)
 		fsreply(fs, r, "message size too small");
 		return;
 	}
-	messagesize = r->f.msize;
-	if(messagesize > 8192+IOHDRSZ)
-		messagesize = 8192+IOHDRSZ;
-	r->f.msize = messagesize;
+	if(r->f.msize < fs->messagesize)
+		fs->messagesize = r->f.msize;
+	r->f.msize = fs->messagesize;
 	if(strncmp(r->f.version, "9P", 2) != 0)
 		r->f.version = "unknown";
 	else
@@ -847,6 +827,7 @@ fswalk(Fs *fs, Request *r, Fid *f)
 			if(strcmp(name, "..") == 0)
 				qid = parentqid(qid);
 			else if(strcmp(name, ".") != 0){
+				refreshdb();
 				for(i = 0; ; i++){
 					n = fsdirgen(fs, qid, i, &d, nil, 0);
 					if(n < 0){
@@ -881,7 +862,8 @@ ingroup(char *user, char *group)
 	t = ndbsearch(db, &s, "group", group);
 	if(t == nil)
 		return 0;
-	for(nt = t; nt; nt = nt->entry){
+
+	for(nt = t; nt != nil; nt = nt->entry){
 		if(strcmp(nt->attr, "uid") == 0)
 		if(strcmp(nt->val, user) == 0)
 			break;
@@ -900,7 +882,7 @@ userok(char *u, char *cname)
 	if(t == nil)
 		return 0;
 
-	for(nt = t; nt; nt = nt->entry){
+	for(nt = t; nt != nil; nt = nt->entry){
 		if(strcmp(nt->attr, "uid") == 0)
 		if(strcmp(nt->val, u) == 0)
 			break;
@@ -918,20 +900,6 @@ int m2p[] ={
 	[OWRITE]	2,
 	[ORDWR]		6
 };
-
-/*
- *  broadcast a message to all listeners
- */
-void
-bcastmsg(Fs *fs, Console *c, char *msg, int n)
-{
-	Fid *fl;
-
-	for(fl = c->flist; fl; fl = fl->cnext){
-		fromconsole(fl, msg, n);
-		fskick(fs, fl);
-	}
-}
 
 void
 fsopen(Fs *fs, Request *r, Fid *f)
@@ -958,7 +926,7 @@ fsopen(Fs *fs, Request *r, Fid *f)
 
 	switch(TYPE(f->qid)){
 	case Qdata:
-		c = fs->cons[CONS(f->qid)];
+		c = cons[CONS(f->qid)];
 		if(!userok(f->user, c->name)){
 			fsreply(fs, r, Eperm);
 			return;
@@ -967,18 +935,16 @@ fsopen(Fs *fs, Request *r, Fid *f)
 		f->wp = f->buf;
 		f->c = c;
 		lock(c);
-		sprint(f->mbuf, "[%s] ", f->user);
-		f->bufn = strlen(f->mbuf);
-		f->used = 0;
 		f->cnext = c->flist;
 		c->flist = f;
-		bcastmembers(fs, c, "+", f);
+		bcastmembers(f, "+");
+		initmsguser(f);
 		if(c->pid == 0)
-			fsreopen(fs, c);
+			reopen(c);
 		unlock(c);
 		break;
 	case Qctl:
-		c = fs->cons[CONS(f->qid)];
+		c = cons[CONS(f->qid)];
 		if(!userok(f->user, c->name)){
 			fsreply(fs, r, Eperm);
 			return;
@@ -986,7 +952,7 @@ fsopen(Fs *fs, Request *r, Fid *f)
 		f->c = c;
 		break;
 	case Qstat:
-		c = fs->cons[CONS(f->qid)];
+		c = cons[CONS(f->qid)];
 		if(!userok(f->user, c->name)){
 			fsreply(fs, r, Eperm);
 			return;
@@ -996,7 +962,7 @@ fsopen(Fs *fs, Request *r, Fid *f)
 	}
 
 	f->open = 1;
-	r->f.iounit = messagesize-IOHDRSZ;
+	r->f.iounit = fs->messagesize-IOHDRSZ;
 	r->f.qid = f->qid;
 	fsreply(fs, r, nil);
 }
@@ -1030,6 +996,8 @@ fsread(Fs *fs, Request *r, Fid *f)
 		p = r->buf + IOHDRSZ;
 		e = p + r->f.count;
 		offset = r->f.offset;
+		if(offset == 0)
+			refreshdb();
 		off = 0;
 		for(i=0; p<e; i++, off+=m){
 			m = fsdirgen(fs, f->qid, i, &d, p, e-p);
@@ -1044,7 +1012,7 @@ fsread(Fs *fs, Request *r, Fid *f)
 		switch(TYPE(f->qid)){
 		case Qdata:
 			addreq(&f->r, r);
-			fskick(fs, f);
+			kick(f);
 			return;
 		case Qctl:
 			r->f.data = (char*)r->buf+IOHDRSZ;
@@ -1109,21 +1077,19 @@ fswrite(Fs *fs, Request *r, Fid *f)
 				f->used = 1;
 		}
 		if(f->c->chat){
-			fskick(fs, f);
+			kick(f);
 			if(!f->used)
 				break;
 	
-			if(f->bufn + r->f.count > Bufsize){
-				r->f.count -= (f->bufn + r->f.count) % Bufsize;
+			if(f->bufn + r->f.count > sizeof(f->mbuf)){
+				r->f.count -= (f->bufn + r->f.count) % sizeof(f->mbuf);
 				eol = 1;
 			}
-			strncat(f->mbuf, r->f.data, r->f.count);
+			memmove(f->mbuf + f->bufn, r->f.data, r->f.count);
 			f->bufn += r->f.count;
 			if(eol){
-				bcastmsg(fs, f->c, f->mbuf, f->bufn);
-				sprint(f->mbuf, "[%s] ", f->user);
-				f->bufn = strlen(f->mbuf);
-				f->used = 0;
+				bcastmsg(f->c, f->mbuf, f->bufn);
+				initmsguser(f);
 			}
 		}
 		else
@@ -1153,9 +1119,9 @@ fsclunk(Fs *fs, Request *r, Fid *f)
 				break;
 			}
 		}
-		bcastmembers(fs, f->c, "-", f);
+		bcastmembers(f, "-");
 		if(f->c->ondemand && f->c->flist == nil)
-			fsreopen(fs, f->c);
+			reopen(f->c);
 		unlock(f->c);
 	}
 	fsreply(fs, r, nil);
@@ -1178,7 +1144,7 @@ fsstat(Fs *fs, Request *r, Fid *f)
 	q = parentqid(f->qid);
 	for(i = 0; ; i++){
 		r->f.stat = r->buf+IOHDRSZ;
-		n = fsdirgen(fs, q, i, &d, r->f.stat, messagesize-IOHDRSZ);
+		n = fsdirgen(fs, q, i, &d, r->f.stat, fs->messagesize-IOHDRSZ);
 		if(n < 0){
 			fsreply(fs, r, Eexist);
 			return;
@@ -1199,19 +1165,19 @@ fswstat(Fs *fs, Request *r, Fid*)
 void
 fsreply(Fs *fs, Request *r, char *err)
 {
+	uchar buf[Bufsize+IOHDRSZ];
 	int n;
-	uchar buf[8192+IOHDRSZ];
 
 	if(err){
 		r->f.type = Rerror;
 		r->f.ename = err;
 	}
-	n = convS2M(&r->f, buf, messagesize);
+	n = convS2M(&r->f, buf, fs->messagesize);
 	if(debug)
 		fprint(2, "%F path %llux n=%d\n", &r->f, r->fid->qid.path, n);
 	fsputfid(fs, r->fid);
 	if(write(fs->fd, buf, n) != n)
-		fatal("unmounted");
+		sysfatal("unmounted");
 	free(r);
 }
 
@@ -1219,7 +1185,7 @@ fsreply(Fs *fs, Request *r, char *err)
  *  called whenever input or a read request has been received
  */
 void
-fskick(Fs *fs, Fid *f)
+kick(Fid *f)
 {
 	Request *r;
 	char *p, *rp, *wp, *ep;
@@ -1242,7 +1208,7 @@ fskick(Fs *fs, Fid *f)
 		f->rp = rp;
 		r->f.data = (char*)r->buf;
 		r->f.count = p - (char*)r->buf;
-		fsreply(fs, r, nil);
+		fsreply(f->fs, r, nil);
 	}
 	unlock(f);
 }
@@ -1277,7 +1243,8 @@ threadmain(int argc, char **argv)
 
 	db = ndbopen(consoledb);
 	if(db == nil)
- 		fatal("can't open %s: %r", consoledb);
+ 		sysfatal("can't open %s: %r", consoledb);
+	readdb();
 
 	fsmount(mntpt);
 }

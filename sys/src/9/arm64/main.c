@@ -100,7 +100,7 @@ confinit(void)
 	if(conf.nproc > 4000)
 		conf.nproc = 4000;
 	conf.nswap = conf.npage*3;
-	conf.nswppo = 4096;
+	conf.nswppo = (10*MB)/BY2PG;
 	conf.nimage = 200;
 
 	conf.copymode = conf.nmach > 1;
@@ -187,7 +187,6 @@ main(void)
 	timersinit();
 	pageinit();
 	procinit0();
-	initseg();
 	links();
 	chandevreset();
 	userinit();

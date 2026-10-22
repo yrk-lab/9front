@@ -635,6 +635,10 @@ tcpacktimer(void *arg)
 	Conv *s = (Conv*)arg;
 	Tcpctl *tcb = (Tcpctl*)s->ptcl;
 
+	/* avoid deadlock during qsetbypass() oq->iq flush */ 
+	if(tcb->bypass != nil)
+		return;
+
 	qlock(s);
 	if(tcb->state != Closed && tcb->bypass == nil){
 		tcb->flags |= FORCE;
@@ -2700,8 +2704,9 @@ tcptimeout(void *arg)
 	default:
 		if(tcb->backoff < 8)
 			tcb->backoff++;
-		if(tcb->state == Syn_sent)
-			maxback = MAXBACKMS/2;
+		if(tcb->state == Syn_sent
+		&& tcb->backoff > 2)
+			maxback = 0;
 		else
 			maxback = MAXBACKMS;
 		tcb->backedoff += tcb->timer.start * MSPTICK;

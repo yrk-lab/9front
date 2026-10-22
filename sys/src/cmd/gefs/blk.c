@@ -41,7 +41,7 @@ syncblk(Blk *b)
 	bassert(b, checkflag(b, Bfinal, 0));
 	bassert(b, b->bp.addr >= 0);
 	tracex("syncblk", b->bp, b->type, -1);
-	if(pwrite(fs->fd, b->buf, Blksz, b->bp.addr) == -1)
+	if(pwrite(fs->fd, b->buf, Blksz, b->bp.addr) != Blksz)
 		broke("%B %s: %r", b->bp, Eio);
 	setflag(b, 0, Bdirty);
 }
@@ -995,7 +995,7 @@ qinit(Syncq *q)
 	q->fullrz.l = &q->lk;
 	q->emptyrz.l = &q->lk;
 	q->nheap = 0;
-	q->heapsz = fs->cmax;
+	q->heapsz = 2*fs->cmax;
 	q->heap = emalloc(q->heapsz*sizeof(Qent), 1);
 }
 

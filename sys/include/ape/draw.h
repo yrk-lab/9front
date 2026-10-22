@@ -24,7 +24,7 @@ typedef struct	Rectangle Rectangle;
 typedef struct	RGB RGB;
 typedef struct	Screen Screen;
 typedef struct	Subfont Subfont;
-typedef long	Warp[3][3];
+typedef struct	Warp Warp;
 
 #pragma varargck	type	"R"	Rectangle
 #pragma varargck	type	"P"	Point
@@ -155,6 +155,14 @@ enum {
 	XBGR32	= CHAN4(CIgnore, 8, CBlue, 8, CGreen, 8, CRed, 8),
 };
 
+/*
+ * Warp flags used to enable optimized paths
+ * based on the encoded affine map's properties.
+ */
+enum {
+	WFintupscale	= 1,	/* integer upscaling */
+};
+
 extern	char*	chantostr(char*, ulong);
 extern	ulong	strtochan(char*);
 extern	int		chantodepth(ulong);
@@ -209,7 +217,6 @@ struct Display
 	Subfont		*defaultsubfont;
 	Image		*windows;
 	Image		*screenimage;
-	int		_isnewdisplay;
 };
 
 struct Image
@@ -230,6 +237,12 @@ struct RGB
 	ulong	red;
 	ulong	green;
 	ulong	blue;
+};
+
+struct Warp
+{
+	long	m[3][3];
+	int	flags;		/* set by mkwarp(2). do not touch */
 };
 
 /*
@@ -336,10 +349,11 @@ extern "C" {
  */
 extern Image*	_allocimage(Image*, Display*, Rectangle, ulong, int, ulong, int, int);
 extern Image*	allocimage(Display*, Rectangle, ulong, int, ulong);
-extern uchar*	bufimage(Display*, int);
+extern int	drawcmd(Display*, char*, ...);
 extern int	bytesperline(Rectangle, int);
 extern void	closedisplay(Display*);
 extern void	drawerror(Display*, char*);
+extern int	_flushimage(Display*);
 extern int	flushimage(Display*, int);
 extern int	freeimage(Image*);
 extern int	_freeimage1(Image*);
@@ -521,7 +535,6 @@ extern	Font		*font;
 extern	Image	*screen;
 extern	Screen	*_screen;
 extern	int	_cursorfd;
-extern	uchar*	_bufimageop(Display*, int, Drawop);
 
 #define	BGSHORT(p)	((p)[0]|((p)[1]<<8))
 #define	BGLONG(p)	((p)[0]|((p)[1]<<8)|((p)[2]<<16)|((p)[3]<<24))

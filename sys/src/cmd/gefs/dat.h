@@ -4,7 +4,6 @@ typedef struct Arena	Arena;
 typedef struct Bfree	Bfree;
 typedef struct Blk	Blk;
 typedef struct Bptr	Bptr;
-typedef struct Bucket	Bucket;
 typedef struct Chan	Chan;
 typedef struct Conn	Conn;
 typedef struct Cron	Cron;
@@ -87,6 +86,7 @@ enum {
 	Msgmax  	= 1 + (Kvmax > Kpmax ? Kvmax : Kpmax),
 	Estacksz	= 64,
 	Maxprocs	= 128,
+	Maxheight	= 32,
 };
 
 enum {
@@ -150,6 +150,7 @@ enum {
 /* internal errors */
 //#define Efs	(abort(), "fs broke")
 extern char Efs[];
+extern char Eheight[];
 extern char Enoval[];
 extern char Ecorrupt[];
 extern char Efsvers[];
@@ -425,10 +426,6 @@ struct Arange {
 	vlong	len;
 };
 
-struct Bucket {
-	Blk	*b;
-};
-
 struct Amsg {
 	int	op;
 	union {
@@ -616,7 +613,7 @@ struct Gefs {
 	/* block lru */
 	QLock	lrulk;
 	Rendez	lrurz;
-	Bucket	*bcache;
+	Blk	**bcache;
 	Blk	*chead;
 	Blk	*ctail;
 	usize	ccount;
@@ -784,7 +781,7 @@ struct Scan {
 	Key	pfx;
 	char	kvbuf[Kvmax];
 	char	pfxbuf[Keymax];
-	Scanp	*path;
+	Scanp	path[Maxheight];
 };
 
 struct Blk {
