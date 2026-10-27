@@ -1,0 +1,34 @@
+name: Merge front into git4e
+
+on:
+  push:
+    branches:
+      - front
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  merge-front-into-git4e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout git4e branch
+        uses: actions/checkout@v4
+        with:
+          ref: git4e
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Merge front into git4e
+        run: |
+          set -euo pipefail
+
+          git fetch origin front git4e
+          git checkout git4e
+          git merge --no-ff origin/front
+          git push origin git4e
