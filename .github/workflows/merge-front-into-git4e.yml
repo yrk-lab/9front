@@ -4,10 +4,17 @@ on:
   push:
     branches:
       - front
+  workflow_run:
+    workflows: ["Sync front with upstream"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: merge-front-into-git4e
+  cancel-in-progress: false
 
 jobs:
   merge-front-into-git4e:
